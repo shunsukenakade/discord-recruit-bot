@@ -7,8 +7,8 @@ Set-Location $PSScriptRoot
 $version = (Select-String -Path updater.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
 $tag = "v$version"
 
-gh release view $tag *> $null
-if ($LASTEXITCODE -eq 0) { throw "$tag はリリース済みです。updater.py の VERSION を上げてください。" }
+$released = gh release list --json tagName --jq ".[].tagName"
+if ($released -contains $tag) { throw "$tag はリリース済みです。updater.py の VERSION を上げてください。" }
 if (git status --porcelain) { throw "コミットしていない変更があります。先にコミットしてください。" }
 
 & .\venv\Scripts\python.exe -m PyInstaller --noconfirm --onefile --noconsole --name GameRecruitBot --distpath dist --workpath build bot.py

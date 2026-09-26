@@ -9,6 +9,8 @@
 - /v /o /a（valorant・overwatch・apex）、/vnight /onight /anight（夜〜）、/vnow /onow /anow（今〜）の
   ショートカット募集。オプションで人数・時刻を指定可能
 - 募集中は「再募集」、締め切り後は「開始を呼びかける」ボタン
+- /help で使い方を表示
+- 更新後の起動時に、更新内容をチャットに通知
 - /update（Botの所有者のみ）と起動時チェックで、GitHub Releases から自動更新（updater.py）
 
 必要なもの:
@@ -21,6 +23,7 @@
 """
 
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -44,6 +47,25 @@ for _env_name in (".env", ".env.txt"):
         load_dotenv(_env_path, encoding="utf-8-sig")
         break
 TOKEN = os.getenv("DISCORD_TOKEN")
+
+# 前回起動時のバージョンや、更新通知を送るチャンネルを覚えておくファイル
+STATE_PATH = os.path.join(BASE_DIR, "bot_state.json")
+
+
+def load_state() -> dict:
+    try:
+        with open(STATE_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state: dict):
+    try:
+        with open(STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except OSError:
+        logging.exception("状態ファイルを保存できませんでした")
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -196,7 +218,51 @@ async def on_ready():
     logging.info(f"ログイン完了: {bot.user}（v{updater.VERSION}）")
     if not _startup_checked:
         _startup_checked = True
-        bot.loop.create_task(startup_update_check())
+        bot.loop.create_task(after_first_ready())
+
+
+async def after_first_ready():
+    await announce_update_if_needed()
+    await startup_update_check()
+
+
+async def announce_update_if_needed():
+    """前回起動時からバージョンが変わっていたら、更新内容をチャットに送る。"""
+    state = load_state()
+    prev = state.get("last_version")
+    updated = updater.AFTER_UPDATE_ARG in sys.argv or (prev is not None and prev != updater.VERSION)
+    state["last_version"] = updater.VERSION
+    save_state(state)
+    if not updated:
+        return
+
+    try:
+        notes = await updater.fetch_release_notes(updater.VERSION)
+    except Exception:
+        logging.exception("更新内容の取得に失敗しました")
+        notes = None
+    embed = discord.Embed(
+        title=f"🔄 Botをアップデートしました（v{updater.VERSION}）",
+        description=(notes or "更新内容は登録されていません。")[:4000],
+        color=0x5865F2,
+    )
+    if prev and prev != updater.VERSION:
+        embed.set_footer(text=f"v{prev} → v{updater.VERSION}")
+
+    # /update を使ったチャンネルがあればそこへ、無ければ各サーバーのシステムメッセージチャンネルへ
+    channel = bot.get_channel(state.get("notice_channel_id") or 0)
+    if channel:
+        channels = [channel]
+    else:
+        channels = [g.system_channel for g in bot.guilds
+                    if g.system_channel and g.system_channel.permissions_for(g.me).send_messages]
+    if not channels:
+        logging.warning("更新通知を送れるチャンネルが見つかりませんでした")
+    for ch in channels:
+        try:
+            await ch.send(embed=embed)
+        except discord.HTTPException:
+            logging.exception("更新通知の送信に失敗しました: #%s", ch)
 
 
 async def startup_update_check():
@@ -234,6 +300,10 @@ async def update_command(interaction: discord.Interaction):
     if _update_lock.locked():
         await interaction.followup.send("更新処理の途中です。しばらく待ってください。", ephemeral=True)
         return
+
+    state = load_state()
+    state["notice_channel_id"] = interaction.channel_id  # 更新後の通知はこのチャンネルへ
+    save_state(state)
 
     async with _update_lock:
         try:
@@ -300,6 +370,41 @@ def make_quick_recruit(name: str, game: str, default_capacity: int) -> app_comma
 
 for _name, _game, _capacity in QUICK_RECRUITS:
     bot.tree.add_command(make_quick_recruit(_name, _game, _capacity))
+
+
+@bot.tree.command(name="help", description="コマンドとボタンの使い方を表示します")
+async def help_command(interaction: discord.Interaction):
+    embed = discord.Embed(title="📖 ゲーム募集bot の使い方", color=0x5865F2)
+
+    quick = "\n".join(f"`/{name}` … {game}（{cap}人）" for name, game, cap in QUICK_RECRUITS)
+    embed.add_field(
+        name="かんたん募集",
+        value=f"{quick}\n\nオプションで **人数** と **時刻** を変更できます。\n例: `/v 人数:3 時刻:22:00〜`",
+        inline=False,
+    )
+    embed.add_field(
+        name="自由に募集",
+        value="`/recruit ゲーム名` … 好きなゲームで募集します。\n"
+              "オプション: 定員（capacity）・開始予定（start_time）・メモ（memo）",
+        inline=False,
+    )
+    embed.add_field(
+        name="募集メッセージのボタン",
+        value="**参加する** … 募集に参加します\n"
+              "**参加をやめる** … 参加を取り消します（主催者は不可）\n"
+              "**締め切る** … 募集を締め切ります（主催者のみ）\n"
+              "**再募集** … 残り人数を @everyone で呼びかけます（主催者のみ・募集中）\n"
+              "**開始を呼びかける** … 参加者全員にメンションします（主催者のみ・締め切り後）\n"
+              "定員に達すると自動で締め切られます。",
+        inline=False,
+    )
+    embed.add_field(
+        name="その他",
+        value="`/help` … この説明を表示します\n`/update` … Botを最新版に更新します（Botの所有者のみ）",
+        inline=False,
+    )
+    embed.set_footer(text=f"v{updater.VERSION}")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="recruit_close", description="自分が直前に立てた募集を締め切ります（メッセージへの返信で使う場合はそちらが優先）")

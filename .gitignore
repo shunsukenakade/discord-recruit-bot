@@ -14,3 +14,4 @@ bot.log*
 
 # 配布用zipには.envが入っていることがある
 *.zip
+bot_state.json

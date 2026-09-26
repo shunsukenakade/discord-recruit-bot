@@ -13,7 +13,7 @@ import sys
 
 import aiohttp
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 GITHUB_REPO = "shunsukenakade/discord-recruit-bot"
 ASSET_NAME = "GameRecruitBot.exe"
 
@@ -71,6 +71,19 @@ async def fetch_latest_release() -> dict | None:
                 "sha256": digest.removeprefix("sha256:") if digest.startswith("sha256:") else None,
             }
     raise UpdateError(f"リリース {tag} に {ASSET_NAME} が添付されていません。")
+
+
+async def fetch_release_notes(version: str) -> str | None:
+    """指定バージョンのリリースに書かれた更新内容を取得する。"""
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/tags/v{version}"
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "GameRecruitBot"}
+    async with aiohttp.ClientSession(headers=headers) as session:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            if resp.status == 404:
+                return None
+            resp.raise_for_status()
+            data = await resp.json()
+    return (data.get("body") or "").strip() or None
 
 
 async def download_and_replace(release: dict):

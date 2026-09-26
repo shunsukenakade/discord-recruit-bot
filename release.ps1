@@ -1,4 +1,4 @@
-# 新しいバージョンをGitHubにリリースする。
+﻿# 新しいバージョンをGitHubにリリースする。
 # 使い方: updater.py の VERSION を上げてコミットしてから、このスクリプトを実行する。
 # リリース後、各PCのBotは /update または次回起動時に自動で更新される。
 $ErrorActionPreference = "Stop"

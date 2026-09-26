@@ -1,0 +1,16 @@
+# トークンは絶対に公開しない
+.env
+.env.txt
+
+venv/
+__pycache__/
+build/
+dist/
+*.spec
+*.exe
+*.exe.old
+*.exe.new
+bot.log*
+
+# 配布用zipには.envが入っていることがある
+*.zip

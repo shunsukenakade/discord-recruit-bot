@@ -107,7 +107,8 @@ class RecruitView(discord.ui.View):
 
     async def refresh(self, interaction: discord.Interaction):
         # 定員に達したら自動締め切り
-        if self.capacity and len(self.participants) >= self.capacity and not self.closed:
+        filled = bool(self.capacity and len(self.participants) >= self.capacity and not self.closed)
+        if filled:
             self.closed = True
 
         # 募集中は「参加する」「再募集」、締め切り後は「開始を呼びかける」だけ押せるようにする
@@ -116,6 +117,18 @@ class RecruitView(discord.ui.View):
         self.start_button.disabled = not self.closed
 
         await interaction.message.edit(embed=self.build_embed(), view=self)
+
+        if filled:
+            # 人数が揃ったことを参加者に知らせる
+            members = " ".join(m.mention for m in self.participants)
+            try:
+                await interaction.message.reply(
+                    f"{members}\n{self.game} のメンバーが揃いました！（{len(self.participants)}/{self.capacity}人）募集を締め切りました。",
+                    allowed_mentions=discord.AllowedMentions(users=True),
+                    mention_author=False,
+                )
+            except discord.HTTPException:
+                logging.exception("締め切りの通知に失敗しました")
 
     async def reply_to_recruit(self, interaction: discord.Interaction, content: str,
                                mentions: discord.AllowedMentions):

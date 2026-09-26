@@ -13,7 +13,7 @@ import sys
 
 import aiohttp
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 GITHUB_REPO = "shunsukenakade/discord-recruit-bot"
 ASSET_NAME = "GameRecruitBot.exe"
 

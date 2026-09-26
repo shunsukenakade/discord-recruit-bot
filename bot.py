@@ -119,12 +119,12 @@ class RecruitView(discord.ui.View):
         await interaction.message.edit(embed=self.build_embed(), view=self)
 
         if filled:
-            # 人数が揃ったことを参加者に知らせる
-            members = " ".join(m.mention for m in self.participants)
+            # 人数が揃ったことを知らせる（通知は鳴らさず、名前だけ表示）
+            names = "、".join(m.display_name for m in self.participants)
             try:
                 await interaction.message.reply(
-                    f"{members}\n{self.game} のメンバーが揃いました！（{len(self.participants)}/{self.capacity}人）募集を締め切りました。",
-                    allowed_mentions=discord.AllowedMentions(users=True),
+                    f"{self.game} のメンバーが揃いました！（{len(self.participants)}/{self.capacity}人）募集を締め切りました。\n参加者: {names}",
+                    allowed_mentions=discord.AllowedMentions.none(),
                     mention_author=False,
                 )
             except discord.HTTPException:

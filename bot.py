@@ -480,12 +480,27 @@ def run_bot_thread(state: dict):
             icon.stop()
 
 
+# Cloudflare Workers 版（worker/）に移行済み。このexeは起動してもBotを動かさない
+RETIRED = True
+
+
 def main():
     import ctypes
     import threading
+    import time
     import pystray
 
-    import time
+    if RETIRED:
+        show_message(
+            "ゲーム募集botはCloudflareで動くようになったため、\n"
+            "このPCで起動しておく必要はなくなりました。\n\n"
+            "スタートアップにショートカットを登録している場合は削除してください。\n"
+            "このexeと同じフォルダのファイルも削除して大丈夫です。"
+        )
+        time.sleep(3)  # 更新直後なら旧版の終了を待ってから古いexeを消す
+        updater.cleanup_old_exe()
+        return
+
 
     # 二重起動防止（同じトークンで2つ動くとボタンの応答が衝突するため）。
     # 更新直後の起動では、旧版が終了するまで最大60秒待つ

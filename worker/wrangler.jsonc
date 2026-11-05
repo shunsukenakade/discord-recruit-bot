@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "discord-recruit-bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-10-01",
+  "vars": {
+    // 公開情報（秘密ではない）。トークンは wrangler secret put DISCORD_TOKEN で別に設定する
+    "DISCORD_APPLICATION_ID": "1551533498056314951",
+    "DISCORD_PUBLIC_KEY": "6f773f09ee3b9f96aea2d9297e3c30706785a2edd3660a2f6823867532cb67ab",
+    "DISCORD_API_BASE": "https://discord.com/api/v10"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "RECRUITS", "class_name": "Recruit" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Recruit"] }],
+  "observability": { "enabled": true }
+}

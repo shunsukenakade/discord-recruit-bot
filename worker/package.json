@@ -1,0 +1,17 @@
+{
+  "name": "discord-recruit-bot-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "register": "node scripts/register-commands.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node test/e2e.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261104.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.157.0"
+  }
+}

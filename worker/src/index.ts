@@ -146,8 +146,12 @@ async function replyToRecruit(env: Env, interaction: any, content: string, allow
 
   console.error("返信の送信に失敗しました", res.status, await res.text());
   if (warnOnFailure) {
+    // 押した本人への通知は interaction のトークンで送るので、Botトークンが無効でも届く
+    const content = res.status === 401
+      ? "返信を送れませんでした。Botのトークン設定に問題があります（Botの管理者に連絡してください）。"
+      : "返信を送れませんでした。Botに「メッセージを送信」「メッセージ履歴を読む」権限があるか確認してください。";
     await discordApi(env, `/webhooks/${env.DISCORD_APPLICATION_ID}/${interaction.token}`, {
-      content: "返信を送れませんでした。Botに「メッセージを送信」「メッセージ履歴を読む」権限があるか確認してください。",
+      content,
       flags: EPHEMERAL,
     });
   }

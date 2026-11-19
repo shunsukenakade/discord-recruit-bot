@@ -18,15 +18,15 @@ const publicKeyHex = Buffer.from(publicKey.export({ format: "jwk" }).x, "base64u
 
 // ---- 偽の Discord API ----
 const apiCalls = [];
-let failChannelMessages = false;
+let channelMessageStatus = 200; // 返信の送信を失敗させるときに変える
 const mock = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
   req.on("end", () => {
     apiCalls.push({ path: req.url, body: JSON.parse(body || "{}"), auth: req.headers.authorization });
-    const fail = failChannelMessages && req.url.includes("/channels/");
-    res.writeHead(fail ? 403 : 200, { "Content-Type": "application/json" });
-    res.end(fail ? '{"message":"Missing Access"}' : "{}");
+    const status = req.url.includes("/channels/") ? channelMessageStatus : 200;
+    res.writeHead(status, { "Content-Type": "application/json" });
+    res.end(status === 200 ? "{}" : '{"message":"error"}');
   });
 });
 await new Promise((r) => mock.listen(MOCK_PORT, "127.0.0.1", r));
@@ -229,17 +229,20 @@ await test("5人が同時に参加しても定員（3人）を超えない", asy
   await new Promise((r) => setTimeout(r, 1000));
   assert.equal(apiCalls.filter((a) => a.body.content?.includes("揃いました")).length, 1);
 });
-await test("返信を送れないときは押した本人に知らせる", async () => {
-  const c = command("o", undefined, host);
-  await send(c);
-  failChannelMessages = true;
-  apiCalls.length = 0;
-  await send(press(`again:${c.id}`, host));
-  const calls = await waitForCalls(2);
-  failChannelMessages = false;
-  assert.equal(calls[1].path, "/webhooks/1551533498056314951/tok-press");
-  assert.equal(calls[1].body.flags, 64);
-});
+for (const [status, expected] of [[403, "権限"], [401, "トークン"]]) {
+  await test(`返信を送れないとき（${status}）は押した本人に「${expected}」を知らせる`, async () => {
+    const c = command("o", undefined, host);
+    await send(c);
+    channelMessageStatus = status;
+    apiCalls.length = 0;
+    await send(press(`again:${c.id}`, host));
+    const calls = await waitForCalls(2);
+    channelMessageStatus = 200;
+    assert.equal(calls[1].path, "/webhooks/1551533498056314951/tok-press");
+    assert.equal(calls[1].body.flags, 64);
+    assert.ok(calls[1].body.content.includes(expected), calls[1].body.content);
+  });
+}
 
 console.log(`\n${passed}件すべて成功`);
 stopAll();

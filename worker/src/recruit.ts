@@ -329,7 +329,10 @@ export function vpanelEmbed(targetChannelId: string | null) {
   };
 }
 
-/** 1行目に「今」「夜」、2行目から時刻を1行5個ずつ並べる。custom_id は vtime:<時刻>[:<送信先>]。 */
+// スマホでは「19:00」のボタンが1行に4個までしか入らず、5個だと折り返して崩れる
+const VPANEL_PER_ROW = 4;
+
+/** 1行目に「今」「夜」、2行目から時刻を1行4個ずつ並べる。custom_id は vtime:<時刻>[:<送信先>]。 */
 export function buildVpanelComponents(targetChannelId: string | null) {
   const suffix = targetChannelId ? `:${targetChannelId}` : "";
   const row = (times: string[], style: number) => ({
@@ -342,7 +345,9 @@ export function buildVpanelComponents(targetChannelId: string | null) {
     })),
   });
   const rows = [row(VPANEL_WORDS, 1)]; // 今・夜は目立たせる
-  for (let i = 0; i < VPANEL_CLOCK_TIMES.length; i += 5) rows.push(row(VPANEL_CLOCK_TIMES.slice(i, i + 5), 2));
+  for (let i = 0; i < VPANEL_CLOCK_TIMES.length; i += VPANEL_PER_ROW) {
+    rows.push(row(VPANEL_CLOCK_TIMES.slice(i, i + VPANEL_PER_ROW), 2));
+  }
   return rows;
 }
 

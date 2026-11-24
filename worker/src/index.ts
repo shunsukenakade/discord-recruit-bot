@@ -162,8 +162,8 @@ async function handleComponent(interaction: any, env: Env, ctx: ExecutionContext
   }
   if (action === "vtime" || action === "vtimesel") {
     // valorant パネル: 押した人を主催者にして、選んだ時刻で valorant を募集する
-    //   ボタン         vtime:<今|夜>[:<送信先>]（以前のパネルの vtime:2130 なども動く）
-    //   ドロップダウン vtimesel[:<送信先>]、時刻は選んだ値（2130 など）
+    //   ボタン         vtime:<時刻(2130・今・夜)>[:<送信先>]
+    //   ドロップダウン vtimesel[:<送信先>]、時刻は選んだ値（一時期ドロップダウンにしていたパネル用）
     const [token, channel] = action === "vtime"
       ? [recruitId, target]
       : [interaction.data.values?.[0] ?? "", recruitId];

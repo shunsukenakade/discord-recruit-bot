@@ -16,6 +16,7 @@ export const QUICK_RECRUITS: [string, string, number][] = [
 
 const STRING = 3;
 const INTEGER = 4;
+const CHANNEL = 7;
 // サーバー内でだけ使えるようにする（DMでは使わせない）
 const GUILD_ONLY = { contexts: [0], integration_types: [0] };
 
@@ -45,6 +46,14 @@ export const COMMANDS = [
     description: "ボタン1つで募集できるパネルを置きます",
     default_member_permissions: "32", // サーバー管理（Manage Server）を持つ人だけ
     ...GUILD_ONLY,
+    options: [
+      {
+        type: CHANNEL,
+        name: "送信先",
+        description: "募集を投稿するチャンネル（指定しない場合はパネルと同じチャンネル）",
+        channel_types: [0, 5], // テキスト・アナウンス
+      },
+    ],
   },
   {
     name: "help",

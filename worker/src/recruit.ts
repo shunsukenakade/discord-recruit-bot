@@ -152,24 +152,26 @@ export function buildComponents(recruitId: string, state: RecruitState) {
   ];
 }
 
-export function panelEmbed() {
+export function panelEmbed(targetChannelId: string | null) {
+  const where = targetChannelId ? ` <#${targetChannelId}> に` : "";
   return {
     title: "🎮 ワンボタン募集",
-    description: "ボタンを押すと、押した人が主催者になって @everyone で募集します。\n" +
+    description: `ボタンを押すと、押した人が主催者になって${where} @everyone で募集します。\n` +
       "人数や時刻を変えたいときは `/v 人数:3 時刻:22:00〜` のようにコマンドを使ってください。",
     color: 0x5865f2,
   };
 }
 
 /** パネルのボタン。QUICK_RECRUITS を3つずつ1行に並べる（通常・夜・今）。 */
-export function buildPanelComponents() {
+export function buildPanelComponents(targetChannelId: string | null) {
+  const suffix = targetChannelId ? `:${targetChannelId}` : "";
   const rows = [];
   for (let i = 0; i < QUICK_RECRUITS.length; i += 3) {
     rows.push({
       type: 1,
       components: QUICK_RECRUITS.slice(i, i + 3).map(([name, game, capacity]) => ({
         type: 2,
-        custom_id: `panel:${name}`,
+        custom_id: `panel:${name}${suffix}`,
         label: `${game}（${capacity}人）`,
         style: 1,
       })),
@@ -207,7 +209,8 @@ export function helpEmbed() {
       },
       {
         name: "その他",
-        value: "`/panel` … ボタン1つで募集できるパネルを置きます（サーバー管理権限が必要）\n" +
+        value: "`/panel` … ボタン1つで募集できるパネルを置きます（サーバー管理権限が必要）。" +
+          "`送信先` で募集を投稿するチャンネルを選べます\n" +
           "`/help` … この説明を表示します",
         inline: false,
       },

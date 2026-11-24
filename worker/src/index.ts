@@ -31,6 +31,7 @@ const APPLICATION_COMMAND = 2;
 const MESSAGE_COMPONENT = 3;
 const PONG = 1;
 const CHANNEL_MESSAGE = 4;
+const DEFERRED_CHANNEL_MESSAGE = 5;
 const DEFERRED_UPDATE_MESSAGE = 6;
 const UPDATE_MESSAGE = 7;
 const EPHEMERAL = 64;
@@ -62,13 +63,18 @@ async function handleCommand(interaction: any, env: Env): Promise<Response> {
   if (name === "help") {
     return json({ type: CHANNEL_MESSAGE, data: { embeds: [helpEmbed()], flags: EPHEMERAL } });
   }
-  if (name === "panel") {
-    return json({ type: CHANNEL_MESSAGE, data: { embeds: [panelEmbed()], components: buildPanelComponents() } });
-  }
 
   const options: Record<string, any> = Object.fromEntries(
     (interaction.data.options ?? []).map((o: any) => [o.name, o.value]),
   );
+  if (name === "panel") {
+    // 送信先を指定すると、パネルのボタンで作った募集はそのチャンネルに投稿される
+    const target: string | null = options["送信先"] ?? null;
+    return json({
+      type: CHANNEL_MESSAGE,
+      data: { embeds: [panelEmbed(target)], components: buildPanelComponents(target) },
+    });
+  }
   const host = memberOf(interaction);
   let state: RecruitState;
   if (name === "recruit") {
@@ -88,26 +94,56 @@ async function postRecruit(interaction: any, env: Env, state: RecruitState): Pro
   // 募集ごとの保存先は interaction ID で決め、ボタンの custom_id に埋め込む
   const recruitId: string = interaction.id;
   await recruitStub(env, recruitId).create(state);
+  return json({ type: CHANNEL_MESSAGE, data: recruitMessage(recruitId, state) });
+}
 
-  return json({
-    type: CHANNEL_MESSAGE,
-    data: {
-      content: "@everyone",
-      embeds: [buildEmbed(state)],
-      components: buildComponents(recruitId, state),
-      allowed_mentions: { parse: ["everyone"] },
-    },
-  });
+/** 別のチャンネルに募集を投稿し、押した本人にだけ投稿先を知らせる。 */
+async function postRecruitTo(interaction: any, env: Env, ctx: ExecutionContext, state: RecruitState,
+                             channelId: string): Promise<Response> {
+  const recruitId: string = interaction.id;
+  await recruitStub(env, recruitId).create(state);
+
+  ctx.waitUntil((async () => {
+    const res = await discordApi(env, `/channels/${channelId}/messages`, recruitMessage(recruitId, state));
+    let content: string;
+    if (res.ok) {
+      const message = (await res.json()) as { id: string };
+      content = `<#${channelId}> に募集を投稿しました → ` +
+        `https://discord.com/channels/${interaction.guild_id}/${channelId}/${message.id}`;
+    } else {
+      console.error("募集の投稿に失敗しました", res.status, await res.text());
+      content = res.status === 401
+        ? "募集を投稿できませんでした。Botのトークン設定に問題があります（Botの管理者に連絡してください）。"
+        : `募集を投稿できませんでした。Botが <#${channelId}> を見られて、メッセージを送信できるか確認してください。`;
+    }
+    await discordApi(env, `/webhooks/${env.DISCORD_APPLICATION_ID}/${interaction.token}/messages/@original`,
+                     { content }, "PATCH");
+  })());
+
+  // 投稿が終わるまで「考え中…」を本人にだけ表示しておく
+  return json({ type: DEFERRED_CHANNEL_MESSAGE, data: { flags: EPHEMERAL } });
+}
+
+function recruitMessage(recruitId: string, state: RecruitState) {
+  return {
+    content: "@everyone",
+    embeds: [buildEmbed(state)],
+    components: buildComponents(recruitId, state),
+    allowed_mentions: { parse: ["everyone"] },
+  };
 }
 
 async function handleComponent(interaction: any, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const [action, recruitId] = String(interaction.data.custom_id).split(":");
+  const [action, recruitId, target] = String(interaction.data.custom_id).split(":");
   if (action === "panel") {
     // ワンボタン募集パネル: 押した人を主催者にして、既定の人数で募集する
+    // custom_id は panel:<コマンド名>[:<送信先チャンネルID>]
     const quick = QUICK_RECRUITS.find(([n]) => n === recruitId);
     if (!quick) return ephemeral("このボタンは現在使えません。パネルを置き直してください。");
     const [, game, capacity] = quick;
-    return postRecruit(interaction, env, newState(memberOf(interaction), game, capacity, null, null));
+    const state = newState(memberOf(interaction), game, capacity, null, null);
+    if (target && target !== interaction.channel_id) return postRecruitTo(interaction, env, ctx, state, target);
+    return postRecruit(interaction, env, state);
   }
   if (!recruitId) {
     // Python版のBotで作られた募集のボタン
@@ -174,9 +210,9 @@ async function replyToRecruit(env: Env, interaction: any, content: string, allow
   }
 }
 
-function discordApi(env: Env, path: string, payload: object): Promise<Response> {
+function discordApi(env: Env, path: string, payload: object, method = "POST"): Promise<Response> {
   return fetch(`${env.DISCORD_API_BASE}${path}`, {
-    method: "POST",
+    method,
     headers: {
       Authorization: `Bot ${env.DISCORD_TOKEN}`,
       "Content-Type": "application/json",

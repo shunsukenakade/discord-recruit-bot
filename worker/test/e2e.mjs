@@ -23,10 +23,10 @@ const mock = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
   req.on("end", () => {
-    apiCalls.push({ path: req.url, body: JSON.parse(body || "{}"), auth: req.headers.authorization });
+    apiCalls.push({ method: req.method, path: req.url, body: JSON.parse(body || "{}"), auth: req.headers.authorization });
     const status = req.url.includes("/channels/") ? channelMessageStatus : 200;
     res.writeHead(status, { "Content-Type": "application/json" });
-    res.end(status === 200 ? "{}" : '{"message":"error"}');
+    res.end(status === 200 ? JSON.stringify({ id: `posted${apiCalls.length}` }) : '{"message":"error"}');
   });
 });
 await new Promise((r) => mock.listen(MOCK_PORT, "127.0.0.1", r));
@@ -261,6 +261,48 @@ await test("同じパネルは何度でも使える", async () => {
 });
 await test("知らないパネルボタンには案内を返す", async () =>
   assert.ok(isError(await send(press("panel:zzz", A)), "パネルを置き直して")));
+
+console.log("送信先つきパネル");
+const TARGET = "777";
+await test("/panel 送信先:#募集 のボタンには送信先が入る", async () => {
+  const c = command("panel", [{ name: "送信先", type: 7, value: TARGET }], host);
+  const r = await send(c);
+  assert.equal(r.json.data.components[0].components[0].custom_id, `panel:v:${TARGET}`);
+  assert.ok(r.json.data.embeds[0].description.includes(`<#${TARGET}> に`));
+});
+await test("押すと送信先チャンネルに募集を投稿し、本人にだけリンクを知らせる", async () => {
+  apiCalls.length = 0;
+  const p = { ...press(`panel:o:${TARGET}`, A, "panelMsg"), guild_id: "999" };
+  const r = await send(p);
+  assert.equal(r.json.type, 5);
+  assert.equal(r.json.data.flags, 64);
+  const [post, edit] = await waitForCalls(2);
+  assert.equal(post.method, "POST");
+  assert.equal(post.path, `/channels/${TARGET}/messages`);
+  assert.equal(post.body.content, "@everyone");
+  assert.deepEqual(post.body.allowed_mentions, { parse: ["everyone"] });
+  assert.equal(post.body.embeds[0].footer.text, "主催: Aさん");
+  assert.equal(post.body.components[0].components[0].custom_id, `join:${p.id}`);
+  assert.equal(edit.method, "PATCH");
+  assert.equal(edit.path, "/webhooks/1551533498056314951/tok-press/messages/@original");
+  assert.equal(edit.body.content, `<#${TARGET}> に募集を投稿しました → https://discord.com/channels/999/${TARGET}/posted1`);
+  // 投稿された募集のボタンも動く（送信先チャンネルで押される）
+  const j = await send({ ...press(`join:${p.id}`, B, "posted1"), channel_id: TARGET });
+  assert.equal(field(j, "定員"), "2/5人");
+});
+await test("送信先がパネルと同じチャンネルなら、そのまま投稿する", async () => {
+  const r = await send({ ...press(`panel:a:${TARGET}`, A), channel_id: TARGET });
+  assert.equal(r.json.type, 4);
+  assert.equal(r.json.data.content, "@everyone");
+});
+await test("送信先に投稿できないときは本人に知らせる", async () => {
+  channelMessageStatus = 403;
+  apiCalls.length = 0;
+  await send(press(`panel:v:${TARGET}`, A));
+  const [, edit] = await waitForCalls(2);
+  channelMessageStatus = 200;
+  assert.ok(edit.body.content.includes(`<#${TARGET}> を見られて`), edit.body.content);
+});
 
 for (const [status, expected] of [[403, "権限"], [401, "トークン"]]) {
   await test(`返信を送れないとき（${status}）は押した本人に「${expected}」を知らせる`, async () => {

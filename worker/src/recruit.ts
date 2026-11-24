@@ -152,6 +152,32 @@ export function buildComponents(recruitId: string, state: RecruitState) {
   ];
 }
 
+export function panelEmbed() {
+  return {
+    title: "🎮 ワンボタン募集",
+    description: "ボタンを押すと、押した人が主催者になって @everyone で募集します。\n" +
+      "人数や時刻を変えたいときは `/v 人数:3 時刻:22:00〜` のようにコマンドを使ってください。",
+    color: 0x5865f2,
+  };
+}
+
+/** パネルのボタン。QUICK_RECRUITS を3つずつ1行に並べる（通常・夜・今）。 */
+export function buildPanelComponents() {
+  const rows = [];
+  for (let i = 0; i < QUICK_RECRUITS.length; i += 3) {
+    rows.push({
+      type: 1,
+      components: QUICK_RECRUITS.slice(i, i + 3).map(([name, game, capacity]) => ({
+        type: 2,
+        custom_id: `panel:${name}`,
+        label: `${game}（${capacity}人）`,
+        style: 1,
+      })),
+    });
+  }
+  return rows;
+}
+
 export function helpEmbed() {
   const quick = QUICK_RECRUITS.map(([name, game, cap]) => `\`/${name}\` … ${game}（${cap}人）`).join("\n");
   return {
@@ -179,7 +205,12 @@ export function helpEmbed() {
           "定員に達すると自動で締め切られます。",
         inline: false,
       },
-      { name: "その他", value: "`/help` … この説明を表示します", inline: false },
+      {
+        name: "その他",
+        value: "`/panel` … ボタン1つで募集できるパネルを置きます（サーバー管理権限が必要）\n" +
+          "`/help` … この説明を表示します",
+        inline: false,
+      },
     ],
   };
 }

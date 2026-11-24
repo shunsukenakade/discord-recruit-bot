@@ -229,6 +229,39 @@ await test("5人が同時に参加しても定員（3人）を超えない", asy
   await new Promise((r) => setTimeout(r, 1000));
   assert.equal(apiCalls.filter((a) => a.body.content?.includes("揃いました")).length, 1);
 });
+console.log("ワンボタン募集パネル");
+await test("/panel でボタン9個（3行）のパネルを置く", async () => {
+  const r = await send(command("panel", undefined, host));
+  assert.equal(r.json.type, 4);
+  assert.equal(r.json.data.flags, undefined);
+  assert.equal(r.json.data.embeds[0].title, "🎮 ワンボタン募集");
+  const rows = r.json.data.components;
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows[0].components.map((b) => b.custom_id), ["panel:v", "panel:o", "panel:a"]);
+  assert.equal(rows[1].components[0].label, "夜valorant（5人）");
+});
+await test("パネルのボタンで、押した人が主催者の募集を投稿", async () => {
+  const p = press("panel:a", A, "panelMsg");
+  const r = await send(p);
+  assert.equal(r.json.type, 4);
+  assert.equal(r.json.data.content, "@everyone");
+  assert.deepEqual(r.json.data.allowed_mentions, { parse: ["everyone"] });
+  assert.equal(r.json.data.embeds[0].title, "🟢 募集中｜apex 参加者募集");
+  assert.equal(r.json.data.embeds[0].footer.text, "主催: Aさん");
+  assert.equal(field(r, "定員"), "1/3人");
+  assert.equal(buttons(r).join.custom_id, `join:${p.id}`);
+  // 作られた募集のボタンも動く
+  const j = await send(press(`join:${p.id}`, B));
+  assert.equal(field(j, "定員"), "2/3人");
+  assert.ok(isError(await send(press(`close:${p.id}`, host)), "主催者のみ"));
+});
+await test("同じパネルは何度でも使える", async () => {
+  const r = await send(press("panel:v", C, "panelMsg"));
+  assert.equal(r.json.data.embeds[0].footer.text, "主催: Cさん");
+});
+await test("知らないパネルボタンには案内を返す", async () =>
+  assert.ok(isError(await send(press("panel:zzz", A)), "パネルを置き直して")));
+
 for (const [status, expected] of [[403, "権限"], [401, "トークン"]]) {
   await test(`返信を送れないとき（${status}）は押した本人に「${expected}」を知らせる`, async () => {
     const c = command("o", undefined, host);

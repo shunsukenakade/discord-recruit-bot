@@ -6,8 +6,10 @@ import {
   Recruit,
   buildComponents,
   buildEmbed,
+  buildPanelComponents,
   filledMessage,
   helpEmbed,
+  panelEmbed,
   type Action,
   type Member,
   type RecruitState,
@@ -60,6 +62,9 @@ async function handleCommand(interaction: any, env: Env): Promise<Response> {
   if (name === "help") {
     return json({ type: CHANNEL_MESSAGE, data: { embeds: [helpEmbed()], flags: EPHEMERAL } });
   }
+  if (name === "panel") {
+    return json({ type: CHANNEL_MESSAGE, data: { embeds: [panelEmbed()], components: buildPanelComponents() } });
+  }
 
   const options: Record<string, any> = Object.fromEntries(
     (interaction.data.options ?? []).map((o: any) => [o.name, o.value]),
@@ -75,7 +80,12 @@ async function handleCommand(interaction: any, env: Env): Promise<Response> {
     state = newState(host, game, options["人数"] ?? defaultCapacity, options["時刻"] ?? null, null);
   }
 
-  // 募集ごとの保存先はコマンドの interaction ID で決め、ボタンの custom_id に埋め込む
+  return postRecruit(interaction, env, state);
+}
+
+/** 募集を保存して、@everyone 付きの募集メッセージを投稿する。 */
+async function postRecruit(interaction: any, env: Env, state: RecruitState): Promise<Response> {
+  // 募集ごとの保存先は interaction ID で決め、ボタンの custom_id に埋め込む
   const recruitId: string = interaction.id;
   await recruitStub(env, recruitId).create(state);
 
@@ -92,6 +102,13 @@ async function handleCommand(interaction: any, env: Env): Promise<Response> {
 
 async function handleComponent(interaction: any, env: Env, ctx: ExecutionContext): Promise<Response> {
   const [action, recruitId] = String(interaction.data.custom_id).split(":");
+  if (action === "panel") {
+    // ワンボタン募集パネル: 押した人を主催者にして、既定の人数で募集する
+    const quick = QUICK_RECRUITS.find(([n]) => n === recruitId);
+    if (!quick) return ephemeral("このボタンは現在使えません。パネルを置き直してください。");
+    const [, game, capacity] = quick;
+    return postRecruit(interaction, env, newState(memberOf(interaction), game, capacity, null, null));
+  }
   if (!recruitId) {
     // Python版のBotで作られた募集のボタン
     return ephemeral("この募集は以前のバージョンで作られたため操作できません。新しく募集を作り直してください。");

@@ -41,6 +41,12 @@ export const COMMANDS = [
     ],
   })),
   {
+    name: "panel",
+    description: "ボタン1つで募集できるパネルを置きます",
+    default_member_permissions: "32", // サーバー管理（Manage Server）を持つ人だけ
+    ...GUILD_ONLY,
+  },
+  {
     name: "help",
     description: "コマンドとボタンの使い方を表示します",
     ...GUILD_ONLY,

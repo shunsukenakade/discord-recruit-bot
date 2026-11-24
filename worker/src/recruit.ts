@@ -298,7 +298,9 @@ export function buildPanelComponents(targetChannelId: string | null) {
 }
 
 // valorant パネルの時刻ボタン。ボタンの custom_id には「:」を入れられないので 4 桁（2130 など）で持つ
-export const VPANEL_TIMES = ["今", ...halfHours(19, 26), "夜"];
+const VPANEL_WORDS = ["今", "夜"];
+const VPANEL_CLOCK_TIMES = halfHours(19, 26);
+export const VPANEL_TIMES = [...VPANEL_WORDS, ...VPANEL_CLOCK_TIMES];
 
 /** fromHour 時から toHour 時まで30分おき（24時以降は 0:00, 0:30 … と表示）。 */
 function halfHours(fromHour: number, toHour: number): string[] {
@@ -327,21 +329,20 @@ export function vpanelEmbed(targetChannelId: string | null) {
   };
 }
 
-/** 時刻ボタンを1行5個ずつ並べる。custom_id は vtime:<時刻>[:<送信先>]。 */
+/** 1行目に「今」「夜」、2行目から時刻を1行5個ずつ並べる。custom_id は vtime:<時刻>[:<送信先>]。 */
 export function buildVpanelComponents(targetChannelId: string | null) {
   const suffix = targetChannelId ? `:${targetChannelId}` : "";
-  const rows = [];
-  for (let i = 0; i < VPANEL_TIMES.length; i += 5) {
-    rows.push({
-      type: 1,
-      components: VPANEL_TIMES.slice(i, i + 5).map((time) => ({
-        type: 2,
-        custom_id: `vtime:${timeToToken(time)}${suffix}`,
-        label: time,
-        style: time.includes(":") ? 2 : 1, // 今・夜は目立たせる
-      })),
-    });
-  }
+  const row = (times: string[], style: number) => ({
+    type: 1,
+    components: times.map((time) => ({
+      type: 2,
+      custom_id: `vtime:${timeToToken(time)}${suffix}`,
+      label: time,
+      style,
+    })),
+  });
+  const rows = [row(VPANEL_WORDS, 1)]; // 今・夜は目立たせる
+  for (let i = 0; i < VPANEL_CLOCK_TIMES.length; i += 5) rows.push(row(VPANEL_CLOCK_TIMES.slice(i, i + 5), 2));
   return rows;
 }
 

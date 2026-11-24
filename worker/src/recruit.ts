@@ -20,11 +20,13 @@ export interface RecruitState {
   closed: boolean;
 }
 
-export type Action = "join" | "leave" | "close" | "again" | "start";
+export type Action = "join" | "leave" | "close" | "again" | "start" | "settime";
 
 export type Outcome =
   | { kind: "missing" }
   | { kind: "error"; message: string }
+  // 開始時刻の入力欄を開く（今の時刻を最初から入れておく）
+  | { kind: "modal"; startTime: string | null }
   // 募集メッセージを書き換える。filled なら定員到達で締め切ったことも知らせる
   | { kind: "update"; state: RecruitState; filled: boolean }
   // 募集メッセージに返信（引用）する
@@ -46,9 +48,24 @@ export class Recruit extends DurableObject {
     return outcome;
   }
 
+  async setStartTime(user: Member, startTime: string): Promise<Outcome> {
+    const state = await this.ctx.storage.get<RecruitState>("state");
+    if (!state) return { kind: "missing" };
+    const outcome = applyStartTime(state, user, startTime);
+    if (outcome.kind === "update") await this.ctx.storage.put("state", outcome.state);
+    return outcome;
+  }
+
   async alarm(): Promise<void> {
     await this.ctx.storage.deleteAll();
   }
+}
+
+/** 入力欄で送られた開始時刻を反映する。空欄なら時刻を消す。 */
+export function applyStartTime(state: RecruitState, user: Member, startTime: string): Outcome {
+  if (user.id !== state.host.id) return { kind: "error", message: "時刻の設定は主催者のみ操作できます。" };
+  state.startTime = startTime.trim() || null;
+  return { kind: "update", state, filled: false };
 }
 
 /** ボタン操作を状態に反映する（state は書き換える）。 */
@@ -100,6 +117,10 @@ export function applyAction(state: RecruitState, action: Action, user: Member): 
         userIds: state.participants.map((m) => m.id),
       };
     }
+    case "settime": {
+      if (!isHost) return { kind: "error", message: "時刻の設定は主催者のみ操作できます。" };
+      return { kind: "modal", startTime: state.startTime };
+    }
   }
 }
 
@@ -149,7 +170,34 @@ export function buildComponents(recruitId: string, state: RecruitState) {
         button("start", "開始を呼びかける", 1, !state.closed),
       ],
     },
+    // 1行に置けるボタンは5個までなので2行目に置く
+    { type: 1, components: [button("settime", "⏰ 時刻を設定", 2)] },
   ];
+}
+
+/** 開始時刻の入力欄。送信すると settime:<募集ID> の MODAL_SUBMIT が届く。 */
+export function startTimeModal(recruitId: string, startTime: string | null) {
+  return {
+    custom_id: `settime:${recruitId}`,
+    title: "開始時刻を設定",
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 4, // テキスト入力
+            custom_id: "time",
+            label: "開始時刻（空欄で送信すると時刻を消します）",
+            style: 1,
+            required: false,
+            max_length: 50,
+            placeholder: "例: 22:00〜",
+            ...(startTime ? { value: startTime } : {}),
+          },
+        ],
+      },
+    ],
+  };
 }
 
 export function panelEmbed(targetChannelId: string | null) {
@@ -157,7 +205,7 @@ export function panelEmbed(targetChannelId: string | null) {
   return {
     title: "🎮 ワンボタン募集",
     description: `ボタンを押すと、押した人が主催者になって${where} @everyone で募集します。\n` +
-      "人数や時刻を変えたいときは `/v 人数:3 時刻:22:00〜` のようにコマンドを使ってください。",
+      "開始時刻は、投稿された募集の「⏰ 時刻を設定」ボタンからあとで設定できます。",
     color: 0x5865f2,
   };
 }
@@ -204,6 +252,7 @@ export function helpEmbed() {
           "**締め切る** … 募集を締め切ります（主催者のみ）\n" +
           "**再募集** … 残り人数を @everyone で呼びかけます（主催者のみ・募集中）\n" +
           "**開始を呼びかける** … 参加者全員にメンションします（主催者のみ・締め切り後）\n" +
+          "**⏰ 時刻を設定** … 開始予定を設定・変更します（主催者のみ）\n" +
           "定員に達すると自動で締め切られます。",
         inline: false,
       },

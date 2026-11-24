@@ -12,6 +12,14 @@ import assert from "node:assert/strict";
 const WORKER = "http://127.0.0.1:8797";
 const MOCK_PORT = 8798;
 
+// 前回のテストの wrangler dev が残っていると、別の鍵で応答してしまうので先に確かめる
+try {
+  await fetch(WORKER);
+  throw new Error(`${WORKER} が使用中です。前回のテストの wrangler dev が残っていないか確認してください。`);
+} catch (e) {
+  if (e.message.includes("使用中")) throw e;
+}
+
 // ---- テスト用の鍵 ----
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const publicKeyHex = Buffer.from(publicKey.export({ format: "jwk" }).x, "base64url").toString("hex");
@@ -101,8 +109,16 @@ async function waitForCalls(count) {
 }
 
 const buttons = (res) => Object.fromEntries(
-  res.json.data.components[0].components.map((b) => [b.custom_id.split(":")[0], b]),
+  res.json.data.components.flatMap((row) => row.components).map((b) => [b.custom_id.split(":")[0], b]),
 );
+
+function submitTime(recruitId, value, who, messageId = "msg1") {
+  return {
+    id: nextId(), type: 5, token: "tok-modal", channel_id: CHANNEL, message: { id: messageId },
+    data: { custom_id: `settime:${recruitId}`, components: [{ type: 1, components: [{ type: 4, custom_id: "time", value }] }] },
+    ...who,
+  };
+}
 const field = (res, name) => res.json.data.embeds[0].fields.find((f) => f.name === name)?.value;
 const isError = (res, text) => res.json.type === 4 && res.json.data.flags === 64 && res.json.data.content.includes(text);
 
@@ -229,6 +245,52 @@ await test("5人が同時に参加しても定員（3人）を超えない", asy
   await new Promise((r) => setTimeout(r, 1000));
   assert.equal(apiCalls.filter((a) => a.body.content?.includes("揃いました")).length, 1);
 });
+console.log("⏰ 時刻を設定");
+await test("募集メッセージの2行目に「⏰ 時刻を設定」がある", async () => {
+  const c = command("v", undefined, host);
+  const r = await send(c);
+  assert.equal(r.json.data.components.length, 2);
+  assert.equal(r.json.data.components[1].components[0].custom_id, `settime:${c.id}`);
+  assert.equal(field(r, "開始予定"), undefined);
+});
+await test("主催者以外は時刻を設定できない", async () => {
+  const c = command("v", undefined, host);
+  await send(c);
+  assert.ok(isError(await send(press(`settime:${c.id}`, A)), "主催者のみ"));
+  assert.ok(isError(await send(submitTime(c.id, "23:00", A)), "主催者のみ"));
+});
+await test("主催者が押すと入力欄が開き、送信すると開始予定が入る", async () => {
+  const c = command("o", undefined, host);
+  await send(c);
+  const m = await send(press(`settime:${c.id}`, host));
+  assert.equal(m.json.type, 9);
+  assert.equal(m.json.data.custom_id, `settime:${c.id}`);
+  assert.equal(m.json.data.components[0].components[0].value, undefined);
+  const r = await send(submitTime(c.id, "  23:00〜  ", host));
+  assert.equal(r.json.type, 7);
+  assert.equal(field(r, "開始予定"), "23:00〜");
+  assert.equal(r.json.data.embeds[0].title, "🟢 募集中｜overwatch 参加者募集");
+  // もう一度開くと今の時刻が入っている
+  const again = await send(press(`settime:${c.id}`, host));
+  assert.equal(again.json.data.components[0].components[0].value, "23:00〜");
+});
+await test("空欄で送信すると時刻が消え、他の情報はそのまま", async () => {
+  const c = command("a", [{ name: "時刻", type: 3, value: "21:00" }], host);
+  await send(c);
+  await send(press(`join:${c.id}`, A));
+  const r = await send(submitTime(c.id, "", host));
+  assert.equal(field(r, "開始予定"), undefined);
+  assert.equal(field(r, "定員"), "2/3人");
+});
+await test("締め切り後も時刻を変えられる", async () => {
+  const c = command("anow", undefined, host);
+  await send(c);
+  await send(press(`close:${c.id}`, host));
+  const r = await send(submitTime(c.id, "24:00", host));
+  assert.equal(field(r, "開始予定"), "24:00");
+  assert.equal(r.json.data.embeds[0].title, "🔴 締め切り｜今apex 参加者募集");
+});
+
 console.log("ワンボタン募集パネル");
 await test("/panel でボタン9個（3行）のパネルを置く", async () => {
   const r = await send(command("panel", undefined, host));

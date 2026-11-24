@@ -10,6 +10,7 @@ import {
   filledMessage,
   helpEmbed,
   panelEmbed,
+  startTimeModal,
   type Action,
   type Member,
   type RecruitState,
@@ -29,11 +30,13 @@ export interface Env {
 const PING = 1;
 const APPLICATION_COMMAND = 2;
 const MESSAGE_COMPONENT = 3;
+const MODAL_SUBMIT = 5;
 const PONG = 1;
 const CHANNEL_MESSAGE = 4;
 const DEFERRED_CHANNEL_MESSAGE = 5;
 const DEFERRED_UPDATE_MESSAGE = 6;
 const UPDATE_MESSAGE = 7;
+const MODAL = 9;
 const EPHEMERAL = 64;
 
 export default {
@@ -53,6 +56,8 @@ export default {
         return handleCommand(interaction, env);
       case MESSAGE_COMPONENT:
         return handleComponent(interaction, env, ctx);
+      case MODAL_SUBMIT:
+        return handleModalSubmit(interaction, env);
     }
     return new Response("unknown interaction type", { status: 400 });
   },
@@ -170,7 +175,40 @@ async function handleComponent(interaction: any, env: Env, ctx: ExecutionContext
       ctx.waitUntil(replyToRecruit(env, interaction, outcome.content, allowed, true));
       return json({ type: DEFERRED_UPDATE_MESSAGE });
     }
+    case "modal":
+      return json({ type: MODAL, data: startTimeModal(recruitId, outcome.startTime) });
   }
+}
+
+/** 「⏰ 時刻を設定」の入力欄が送信されたら、募集メッセージの開始予定を書き換える。 */
+async function handleModalSubmit(interaction: any, env: Env): Promise<Response> {
+  const [action, recruitId] = String(interaction.data.custom_id).split(":");
+  if (action !== "settime" || !recruitId) return ephemeral("この入力欄は現在使えません。");
+
+  const startTime = findInputValue(interaction.data.components, "time") ?? "";
+  const outcome = await recruitStub(env, recruitId).setStartTime(memberOf(interaction), startTime);
+  switch (outcome.kind) {
+    case "missing":
+      return ephemeral("この募集は期限切れのため操作できません。新しく募集を作り直してください。");
+    case "update":
+      // ボタンから開いた入力欄なので、そのボタンが付いた募集メッセージを書き換えられる
+      return json({
+        type: UPDATE_MESSAGE,
+        data: { embeds: [buildEmbed(outcome.state)], components: buildComponents(recruitId, outcome.state) },
+      });
+    default:
+      return ephemeral(outcome.kind === "error" ? outcome.message : "時刻を設定できませんでした。");
+  }
+}
+
+/** 送信された入力欄の中から、指定した custom_id のテキスト入力の値を探す。 */
+function findInputValue(components: any[] | undefined, customId: string): string | undefined {
+  for (const c of components ?? []) {
+    if (c.custom_id === customId && typeof c.value === "string") return c.value;
+    const nested = findInputValue(c.components ?? (c.component ? [c.component] : undefined), customId);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
 }
 
 function newState(host: Member, game: string, capacity: number | null, startTime: string | null,

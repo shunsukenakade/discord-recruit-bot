@@ -57,12 +57,7 @@ export const COMMANDS = [
   })),
   {
     name: "panel",
-    description: "ボタン1つで募集できるパネルを置きます",
-    ...PANEL_COMMAND,
-  },
-  {
-    name: "vpanel",
-    description: "時刻ボタンで valorant を募集できるパネルを置きます",
+    description: "ボタン1つで募集できるパネル（3ゲーム用と valorant の時刻用）を置きます",
     ...PANEL_COMMAND,
   },
   {

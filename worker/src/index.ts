@@ -76,19 +76,24 @@ async function handleCommand(interaction: any, env: Env, ctx: ExecutionContext):
   const options: Record<string, any> = Object.fromEntries(
     (interaction.data.options ?? []).map((o: any) => [o.name, o.value]),
   );
-  if (name === "panel" || name === "vpanel") {
-    // 送信先を指定すると、パネルのボタンで作った募集はそのチャンネルに投稿される
+  if (name === "panel") {
+    // 3ゲームのパネルと valorant パネルを続けて置く。送信先を指定すると、パネルから作った募集はそこに投稿される
     const target: string | null = options["送信先"] ?? null;
-    const data = name === "panel"
-      ? { embeds: [panelEmbed(target)], components: buildPanelComponents(target) }
-      : { embeds: [vpanelEmbed(target)], components: buildVpanelComponents(target) };
+    const panels = [
+      { embeds: [panelEmbed(target)], components: buildPanelComponents(target) },
+      { embeds: [vpanelEmbed(target)], components: buildVpanelComponents(target) },
+    ];
     // コマンドへの応答として出すと「〇〇さんが /panel を使用しました」と付くので、Botの普通のメッセージとして置く
-    const res = await discordApi(env, `/channels/${interaction.channel_id}/messages`, data);
-    if (res.ok) return ephemeral("パネルを置きました。");
-    console.error("パネルを置けませんでした", res.status, await res.text());
-    return ephemeral(res.status === 401
-      ? "パネルを置けませんでした。Botのトークン設定に問題があります（Botの管理者に連絡してください）。"
-      : "パネルを置けませんでした。このチャンネルで、Botに「チャンネルを見る」「メッセージを送信」「埋め込みリンク」の権限があるか確認してください。");
+    for (const [i, panel] of panels.entries()) {
+      const res = await discordApi(env, `/channels/${interaction.channel_id}/messages`, panel);
+      if (res.ok) continue;
+      console.error("パネルを置けませんでした", res.status, await res.text());
+      const reason = res.status === 401
+        ? "Botのトークン設定に問題があります（Botの管理者に連絡してください）。"
+        : "このチャンネルで、Botに「チャンネルを見る」「メッセージを送信」「埋め込みリンク」の権限があるか確認してください。";
+      return ephemeral(i === 0 ? `パネルを置けませんでした。${reason}` : `valorant パネルを置けませんでした。${reason}`);
+    }
+    return ephemeral("パネルを置きました。");
   }
   const host = memberOf(interaction);
   let state: RecruitState;

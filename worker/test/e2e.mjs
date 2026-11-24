@@ -27,10 +27,17 @@ const publicKeyHex = Buffer.from(publicKey.export({ format: "jwk" }).x, "base64u
 // ---- 偽の Discord API ----
 const apiCalls = [];
 let channelMessageStatus = 200; // 返信の送信を失敗させるときに変える
+let originalSeq = 0;
 const mock = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
   req.on("end", () => {
+    if (req.method === "GET") {
+      // 応答で投稿された募集メッセージの問い合わせ（最後の募集の記録用）。apiCalls には入れない
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ id: `orig${++originalSeq}`, channel_id: CHANNEL }));
+      return;
+    }
     apiCalls.push({ method: req.method, path: req.url, body: JSON.parse(body || "{}"), auth: req.headers.authorization });
     const status = req.url.includes("/channels/") ? channelMessageStatus : 200;
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -292,13 +299,14 @@ await test("締め切り後も時刻を変えられる", async () => {
 });
 
 console.log("ワンボタン募集パネル");
-await test("/panel でボタン9個（3行）のパネルを置く", async () => {
+await test("/panel でボタン9個（3行）と時刻設定ボタンのパネルを置く", async () => {
   const r = await send(command("panel", undefined, host));
   assert.equal(r.json.type, 4);
   assert.equal(r.json.data.flags, undefined);
   assert.equal(r.json.data.embeds[0].title, "🎮 ワンボタン募集");
   const rows = r.json.data.components;
-  assert.equal(rows.length, 3);
+  assert.equal(rows.length, 4);
+  assert.equal(rows[3].components[0].custom_id, "lasttime");
   assert.deepEqual(rows[0].components.map((b) => b.custom_id), ["panel:v", "panel:o", "panel:a"]);
   assert.equal(rows[1].components[0].label, "夜valorant（5人）");
 });
@@ -364,6 +372,86 @@ await test("送信先に投稿できないときは本人に知らせる", async
   const [, edit] = await waitForCalls(2);
   channelMessageStatus = 200;
   assert.ok(edit.body.content.includes(`<#${TARGET}> を見られて`), edit.body.content);
+});
+
+console.log("⏰ 最後の募集の時刻を設定（パネル）");
+const D = user("20", "Dさん");
+const lastTimePress = (who) => ({ ...press("lasttime", who, "panelMsg"), guild_id: "999" });
+function submitLastTime(customId, value, who) {
+  return {
+    id: nextId(), type: 5, token: "tok-last", channel_id: CHANNEL, guild_id: "999", message: { id: "panelMsg" },
+    data: { custom_id: customId, components: [{ type: 1, components: [{ type: 4, custom_id: "time", value }] }] },
+    ...who,
+  };
+}
+// 募集の記録は投稿のあとに非同期で行われるので、入力欄が開けるようになるまで待つ
+async function waitForLastTimeModal(who, recruitId) {
+  for (let i = 0; i < 40; i++) {
+    const r = await send(lastTimePress(who));
+    if (r.json.type === 9 && (!recruitId || r.json.data.custom_id.startsWith(`lasttime:${recruitId}:`))) return r;
+    await new Promise((res) => setTimeout(res, 200));
+  }
+  throw new Error("最後の募集が記録されなかった");
+}
+
+await test("まだ募集していない人には案内を返す", async () =>
+  assert.ok(isError(await send(lastTimePress(D)), "まだ募集していません")));
+await test("コマンドで募集 → パネルから時刻を設定すると、その募集メッセージが書き換わる", async () => {
+  const c = command("v", [{ name: "時刻", type: 3, value: "21:00" }], D);
+  await send(c);
+  const m = await waitForLastTimeModal(D, c.id);
+  const customId = m.json.data.custom_id;
+  assert.match(customId, new RegExp(`^lasttime:${c.id}:${CHANNEL}:orig\\d+$`));
+  assert.equal(m.json.data.components[0].components[0].value, "21:00");
+  const messageId = customId.split(":")[3];
+
+  apiCalls.length = 0;
+  const r = await send(submitLastTime(customId, "22:30〜", D));
+  assert.equal(r.json.type, 5);
+  assert.equal(r.json.data.flags, 64);
+  const [patch, notice] = await waitForCalls(2);
+  assert.equal(patch.method, "PATCH");
+  assert.equal(patch.path, `/channels/${CHANNEL}/messages/${messageId}`);
+  assert.equal(patch.body.embeds[0].fields.find((f) => f.name === "開始予定").value, "22:30〜");
+  assert.equal(patch.body.components[0].components[0].custom_id, `join:${c.id}`);
+  assert.equal(notice.path, "/webhooks/1551533498056314951/tok-last/messages/@original");
+  assert.equal(notice.body.content,
+    `最後の募集（valorant）の開始予定を「22:30〜」にしました → https://discord.com/channels/999/${CHANNEL}/${messageId}`);
+});
+await test("空欄で送信すると開始予定を消す", async () => {
+  const m = await waitForLastTimeModal(D);
+  apiCalls.length = 0;
+  await send(submitLastTime(m.json.data.custom_id, "", D));
+  const [patch, notice] = await waitForCalls(2);
+  assert.equal(patch.body.embeds[0].fields.find((f) => f.name === "開始予定"), undefined);
+  assert.ok(notice.body.content.startsWith("最後の募集（valorant）の開始予定を消しました"));
+});
+await test("送信先つきパネルで募集すると、そちらが最後の募集になる", async () => {
+  apiCalls.length = 0;
+  const p = { ...press(`panel:a:${TARGET}`, D, "panelMsg"), guild_id: "999" };
+  await send(p);
+  const [post] = await waitForCalls(2);
+  const postedId = `posted${apiCalls.indexOf(post) + 1}`;
+  const m = await waitForLastTimeModal(D, p.id);
+  assert.equal(m.json.data.custom_id, `lasttime:${p.id}:${TARGET}:${postedId}`);
+  assert.equal(m.json.data.components[0].components[0].value, undefined);
+});
+await test("他の人の募集はパネルから編集されない（それぞれ自分の最後の募集）", async () => {
+  const c = command("o", undefined, C);
+  await send(c);
+  const m = await waitForLastTimeModal(C, c.id);
+  assert.ok(m.json.data.custom_id.startsWith(`lasttime:${c.id}:`));
+  const mine = await waitForLastTimeModal(D);
+  assert.ok(!mine.json.data.custom_id.startsWith(`lasttime:${c.id}:`));
+});
+await test("募集メッセージが消されていたら本人に知らせる", async () => {
+  const m = await waitForLastTimeModal(C);
+  channelMessageStatus = 404;
+  apiCalls.length = 0;
+  await send(submitLastTime(m.json.data.custom_id, "23:00", C));
+  const [, notice] = await waitForCalls(2);
+  channelMessageStatus = 200;
+  assert.ok(notice.body.content.includes("見つかりませんでした"), notice.body.content);
 });
 
 for (const [status, expected] of [[403, "権限"], [401, "トークン"]]) {

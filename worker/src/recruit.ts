@@ -175,11 +175,14 @@ export function buildComponents(recruitId: string, state: RecruitState) {
   ];
 }
 
-/** 開始時刻の入力欄。送信すると settime:<募集ID> の MODAL_SUBMIT が届く。 */
-export function startTimeModal(recruitId: string, startTime: string | null) {
+/**
+ * 開始時刻の入力欄。送信すると customId の MODAL_SUBMIT が届く。
+ * 募集メッセージのボタンからは settime:<募集ID>、パネルからは lasttime:<募集ID>:<チャンネル>:<メッセージ>。
+ */
+export function startTimeModal(customId: string, startTime: string | null, title = "開始時刻を設定") {
   return {
-    custom_id: `settime:${recruitId}`,
-    title: "開始時刻を設定",
+    custom_id: customId,
+    title,
     components: [
       {
         type: 1,
@@ -205,7 +208,7 @@ export function panelEmbed(targetChannelId: string | null) {
   return {
     title: "🎮 ワンボタン募集",
     description: `ボタンを押すと、押した人が主催者になって${where} @everyone で募集します。\n` +
-      "開始時刻は、投稿された募集の「⏰ 時刻を設定」ボタンからあとで設定できます。",
+      "「⏰ 最後の募集の時刻を設定」を押すと、自分が最後に立てた募集に開始時刻を設定できます。",
     color: 0x5865f2,
   };
 }
@@ -225,6 +228,10 @@ export function buildPanelComponents(targetChannelId: string | null) {
       })),
     });
   }
+  rows.push({
+    type: 1,
+    components: [{ type: 2, custom_id: "lasttime", label: "⏰ 最後の募集の時刻を設定", style: 2 }],
+  });
   return rows;
 }
 
@@ -259,7 +266,8 @@ export function helpEmbed() {
       {
         name: "その他",
         value: "`/panel` … ボタン1つで募集できるパネルを置きます（サーバー管理権限が必要）。" +
-          "`送信先` で募集を投稿するチャンネルを選べます\n" +
+          "`送信先` で募集を投稿するチャンネルを選べます。" +
+          "パネルの「⏰ 最後の募集の時刻を設定」で、自分が最後に立てた募集に時刻を設定できます\n" +
           "`/help` … この説明を表示します",
         inline: false,
       },

@@ -27,17 +27,10 @@ const publicKeyHex = Buffer.from(publicKey.export({ format: "jwk" }).x, "base64u
 // ---- 偽の Discord API ----
 const apiCalls = [];
 let channelMessageStatus = 200; // 返信の送信を失敗させるときに変える
-let originalSeq = 0;
 const mock = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
   req.on("end", () => {
-    if (req.method === "GET") {
-      // 応答で投稿された募集メッセージの問い合わせ（最後の募集の記録用）。apiCalls には入れない
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ id: `orig${++originalSeq}`, channel_id: CHANNEL }));
-      return;
-    }
     apiCalls.push({ method: req.method, path: req.url, body: JSON.parse(body || "{}"), auth: req.headers.authorization });
     const status = req.url.includes("/channels/") ? channelMessageStatus : 200;
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -119,10 +112,23 @@ const buttons = (res) => Object.fromEntries(
   res.json.data.components.flatMap((row) => row.components).map((b) => [b.custom_id.split(":")[0], b]),
 );
 
-function submitTime(recruitId, value, who, messageId = "msg1") {
+// 時刻の選択画面の操作（target は <募集ID>:<チャンネル>:<メッセージ>）
+function pickFromMenu(target, half, value, who) {
   return {
-    id: nextId(), type: 5, token: "tok-modal", channel_id: CHANNEL, message: { id: messageId },
-    data: { custom_id: `settime:${recruitId}`, components: [{ type: 1, components: [{ type: 4, custom_id: "time", value }] }] },
+    id: nextId(), type: 3, token: "tok-pick", channel_id: CHANNEL, message: { id: "picker" },
+    data: { custom_id: `timeset:${target}:${half}`, component_type: 3, values: [value] }, ...who,
+  };
+}
+function pickButton(customId, who) {
+  return {
+    id: nextId(), type: 3, token: "tok-pick", channel_id: CHANNEL, message: { id: "picker" },
+    data: { custom_id: customId, component_type: 2 }, ...who,
+  };
+}
+function submitTimeInput(target, value, who) {
+  return {
+    id: nextId(), type: 5, token: "tok-pick", channel_id: CHANNEL, message: { id: "picker" },
+    data: { custom_id: `timeedit:${target}`, components: [{ type: 1, components: [{ type: 4, custom_id: "time", value }] }] },
     ...who,
   };
 }
@@ -252,7 +258,7 @@ await test("5人が同時に参加しても定員（3人）を超えない", asy
   await new Promise((r) => setTimeout(r, 1000));
   assert.equal(apiCalls.filter((a) => a.body.content?.includes("揃いました")).length, 1);
 });
-console.log("⏰ 時刻を設定");
+console.log("⏰ 時刻を設定（選択画面）");
 await test("募集メッセージの2行目に「⏰ 時刻を設定」がある", async () => {
   const c = command("v", undefined, host);
   const r = await send(c);
@@ -264,51 +270,99 @@ await test("主催者以外は時刻を設定できない", async () => {
   const c = command("v", undefined, host);
   await send(c);
   assert.ok(isError(await send(press(`settime:${c.id}`, A)), "主催者のみ"));
-  assert.ok(isError(await send(submitTime(c.id, "23:00", A)), "主催者のみ"));
-});
-await test("主催者が押すと入力欄が開き、送信すると開始予定が入る", async () => {
-  const c = command("o", undefined, host);
-  await send(c);
-  const m = await send(press(`settime:${c.id}`, host));
-  assert.equal(m.json.type, 9);
-  assert.equal(m.json.data.custom_id, `settime:${c.id}`);
-  assert.equal(m.json.data.components[0].components[0].value, undefined);
-  const r = await send(submitTime(c.id, "  23:00〜  ", host));
+  const r = await send(pickFromMenu(`${c.id}:${CHANNEL}:msgX`, "pm", "21:00", A));
   assert.equal(r.json.type, 7);
-  assert.equal(field(r, "開始予定"), "23:00〜");
-  assert.equal(r.json.data.embeds[0].title, "🟢 募集中｜overwatch 参加者募集");
-  // もう一度開くと今の時刻が入っている
-  const again = await send(press(`settime:${c.id}`, host));
-  assert.equal(again.json.data.components[0].components[0].value, "23:00〜");
+  assert.ok(r.json.data.content.includes("主催者のみ"));
 });
-await test("空欄で送信すると時刻が消え、他の情報はそのまま", async () => {
-  const c = command("a", [{ name: "時刻", type: 3, value: "21:00" }], host);
-  await send(c);
-  await send(press(`join:${c.id}`, A));
-  const r = await send(submitTime(c.id, "", host));
-  assert.equal(field(r, "開始予定"), undefined);
-  assert.equal(field(r, "定員"), "2/3人");
+
+const oc = command("o", undefined, host);
+const target = `${oc.id}:${CHANNEL}:msgO`;
+const startTimeOf = (call) => call.body.embeds[0].fields.find((f) => f.name === "開始予定")?.value;
+await test("主催者が押すと、本人にだけ30分おきの時刻・今・夜・自分で入力の選択画面が出る", async () => {
+  await send(oc);
+  const r = await send(press(`settime:${oc.id}`, host, "msgO"));
+  assert.equal(r.json.type, 4);
+  assert.equal(r.json.data.flags, 64);
+  assert.equal(r.json.data.content, "「overwatch」の開始予定を選んでください");
+  const [am, pm, buttonsRow] = r.json.data.components.map((row) => row.components);
+  assert.equal(am[0].custom_id, `timeset:${target}:am`);
+  assert.equal(am[0].options.length, 24);
+  assert.equal(am[0].options[0].value, "0:00");
+  assert.equal(am[0].options[1].value, "0:30");
+  assert.equal(am[0].options[23].value, "11:30");
+  assert.equal(pm[0].options[0].value, "12:00");
+  assert.equal(pm[0].options[23].value, "23:30");
+  assert.deepEqual(buttonsRow.map((b) => [b.label, b.custom_id]), [
+    ["今", `timeset:${target}:今`],
+    ["夜", `timeset:${target}:夜`],
+    ["✏️ 自分で入力", `timeinput:${target}`],
+  ]);
+});
+await test("メニューで 21:30 を選ぶと、募集メッセージが書き換わり選択画面が結果に変わる", async () => {
+  await send(press(`join:${oc.id}`, A, "msgO"));
+  apiCalls.length = 0;
+  const r = await send(pickFromMenu(target, "pm", "21:30", host));
+  assert.equal(r.json.type, 7);
+  assert.deepEqual(r.json.data, { content: "開始予定を「21:30」にしました。", components: [] });
+  const [patch] = apiCalls;
+  assert.equal(patch.method, "PATCH");
+  assert.equal(patch.path, `/channels/${CHANNEL}/messages/msgO`);
+  assert.equal(startTimeOf(patch), "21:30");
+  assert.equal(patch.body.embeds[0].fields.find((f) => f.name === "定員").value, "2/5人");
+  assert.equal(patch.body.components[0].components[0].custom_id, `join:${oc.id}`);
+  // もう一度開くと今の時刻が分かる
+  const again = await send(press(`settime:${oc.id}`, host, "msgO"));
+  assert.ok(again.json.data.content.endsWith("（現在: 21:30）"));
+  assert.equal(again.json.data.components[1].components[0].options.find((o) => o.default).value, "21:30");
+});
+for (const word of ["今", "夜"]) {
+  await test(`「${word}」ボタンで開始予定が「${word}」になる`, async () => {
+    apiCalls.length = 0;
+    const r = await send(pickButton(`timeset:${target}:${word}`, host));
+    assert.equal(r.json.data.content, `開始予定を「${word}」にしました。`);
+    assert.equal(startTimeOf(apiCalls[0]), word);
+  });
+}
+await test("「自分で入力」で入力欄が開き、送信すると反映、空欄なら消える", async () => {
+  const m = await send(pickButton(`timeinput:${target}`, host));
+  assert.equal(m.json.type, 9);
+  assert.equal(m.json.data.custom_id, `timeedit:${target}`);
+  assert.equal(m.json.data.components[0].components[0].value, "夜");
+  apiCalls.length = 0;
+  const r = await send(submitTimeInput(target, "  22:00〜  ", host));
+  assert.deepEqual(r.json.data, { content: "開始予定を「22:00〜」にしました。", components: [] });
+  assert.equal(startTimeOf(apiCalls[0]), "22:00〜");
+  apiCalls.length = 0;
+  const cleared = await send(submitTimeInput(target, "", host));
+  assert.equal(cleared.json.data.content, "開始予定を消しました。");
+  assert.equal(startTimeOf(apiCalls[0]), undefined);
 });
 await test("締め切り後も時刻を変えられる", async () => {
   const c = command("anow", undefined, host);
   await send(c);
   await send(press(`close:${c.id}`, host));
-  const r = await send(submitTime(c.id, "24:00", host));
-  assert.equal(field(r, "開始予定"), "24:00");
-  assert.equal(r.json.data.embeds[0].title, "🔴 締め切り｜今apex 参加者募集");
+  apiCalls.length = 0;
+  await send(pickFromMenu(`${c.id}:${CHANNEL}:msgA`, "am", "1:00", host));
+  assert.equal(startTimeOf(apiCalls[0]), "1:00");
+  assert.equal(apiCalls[0].body.embeds[0].title, "🔴 締め切り｜今apex 参加者募集");
+});
+await test("募集メッセージが消されていたら知らせる", async () => {
+  channelMessageStatus = 404;
+  const r = await send(pickFromMenu(target, "am", "9:00", host));
+  channelMessageStatus = 200;
+  assert.ok(r.json.data.content.includes("見つかりませんでした"), r.json.data.content);
 });
 
 console.log("ワンボタン募集パネル");
-await test("/panel でボタン9個（3行）と時刻設定ボタンのパネルを置く", async () => {
+await test("/panel で valorant・overwatch・apex の3ボタンのパネルを置く", async () => {
   const r = await send(command("panel", undefined, host));
   assert.equal(r.json.type, 4);
   assert.equal(r.json.data.flags, undefined);
   assert.equal(r.json.data.embeds[0].title, "🎮 ワンボタン募集");
   const rows = r.json.data.components;
-  assert.equal(rows.length, 4);
-  assert.equal(rows[3].components[0].custom_id, "lasttime");
-  assert.deepEqual(rows[0].components.map((b) => b.custom_id), ["panel:v", "panel:o", "panel:a"]);
-  assert.equal(rows[1].components[0].label, "夜valorant（5人）");
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].components.map((b) => [b.custom_id, b.label]),
+    [["panel:v", "valorant（5人）"], ["panel:o", "overwatch（5人）"], ["panel:a", "apex（3人）"]]);
 });
 await test("パネルのボタンで、押した人が主催者の募集を投稿", async () => {
   const p = press("panel:a", A, "panelMsg");
@@ -372,86 +426,6 @@ await test("送信先に投稿できないときは本人に知らせる", async
   const [, edit] = await waitForCalls(2);
   channelMessageStatus = 200;
   assert.ok(edit.body.content.includes(`<#${TARGET}> を見られて`), edit.body.content);
-});
-
-console.log("⏰ 最後の募集の時刻を設定（パネル）");
-const D = user("20", "Dさん");
-const lastTimePress = (who) => ({ ...press("lasttime", who, "panelMsg"), guild_id: "999" });
-function submitLastTime(customId, value, who) {
-  return {
-    id: nextId(), type: 5, token: "tok-last", channel_id: CHANNEL, guild_id: "999", message: { id: "panelMsg" },
-    data: { custom_id: customId, components: [{ type: 1, components: [{ type: 4, custom_id: "time", value }] }] },
-    ...who,
-  };
-}
-// 募集の記録は投稿のあとに非同期で行われるので、入力欄が開けるようになるまで待つ
-async function waitForLastTimeModal(who, recruitId) {
-  for (let i = 0; i < 40; i++) {
-    const r = await send(lastTimePress(who));
-    if (r.json.type === 9 && (!recruitId || r.json.data.custom_id.startsWith(`lasttime:${recruitId}:`))) return r;
-    await new Promise((res) => setTimeout(res, 200));
-  }
-  throw new Error("最後の募集が記録されなかった");
-}
-
-await test("まだ募集していない人には案内を返す", async () =>
-  assert.ok(isError(await send(lastTimePress(D)), "まだ募集していません")));
-await test("コマンドで募集 → パネルから時刻を設定すると、その募集メッセージが書き換わる", async () => {
-  const c = command("v", [{ name: "時刻", type: 3, value: "21:00" }], D);
-  await send(c);
-  const m = await waitForLastTimeModal(D, c.id);
-  const customId = m.json.data.custom_id;
-  assert.match(customId, new RegExp(`^lasttime:${c.id}:${CHANNEL}:orig\\d+$`));
-  assert.equal(m.json.data.components[0].components[0].value, "21:00");
-  const messageId = customId.split(":")[3];
-
-  apiCalls.length = 0;
-  const r = await send(submitLastTime(customId, "22:30〜", D));
-  assert.equal(r.json.type, 5);
-  assert.equal(r.json.data.flags, 64);
-  const [patch, notice] = await waitForCalls(2);
-  assert.equal(patch.method, "PATCH");
-  assert.equal(patch.path, `/channels/${CHANNEL}/messages/${messageId}`);
-  assert.equal(patch.body.embeds[0].fields.find((f) => f.name === "開始予定").value, "22:30〜");
-  assert.equal(patch.body.components[0].components[0].custom_id, `join:${c.id}`);
-  assert.equal(notice.path, "/webhooks/1551533498056314951/tok-last/messages/@original");
-  assert.equal(notice.body.content,
-    `最後の募集（valorant）の開始予定を「22:30〜」にしました → https://discord.com/channels/999/${CHANNEL}/${messageId}`);
-});
-await test("空欄で送信すると開始予定を消す", async () => {
-  const m = await waitForLastTimeModal(D);
-  apiCalls.length = 0;
-  await send(submitLastTime(m.json.data.custom_id, "", D));
-  const [patch, notice] = await waitForCalls(2);
-  assert.equal(patch.body.embeds[0].fields.find((f) => f.name === "開始予定"), undefined);
-  assert.ok(notice.body.content.startsWith("最後の募集（valorant）の開始予定を消しました"));
-});
-await test("送信先つきパネルで募集すると、そちらが最後の募集になる", async () => {
-  apiCalls.length = 0;
-  const p = { ...press(`panel:a:${TARGET}`, D, "panelMsg"), guild_id: "999" };
-  await send(p);
-  const [post] = await waitForCalls(2);
-  const postedId = `posted${apiCalls.indexOf(post) + 1}`;
-  const m = await waitForLastTimeModal(D, p.id);
-  assert.equal(m.json.data.custom_id, `lasttime:${p.id}:${TARGET}:${postedId}`);
-  assert.equal(m.json.data.components[0].components[0].value, undefined);
-});
-await test("他の人の募集はパネルから編集されない（それぞれ自分の最後の募集）", async () => {
-  const c = command("o", undefined, C);
-  await send(c);
-  const m = await waitForLastTimeModal(C, c.id);
-  assert.ok(m.json.data.custom_id.startsWith(`lasttime:${c.id}:`));
-  const mine = await waitForLastTimeModal(D);
-  assert.ok(!mine.json.data.custom_id.startsWith(`lasttime:${c.id}:`));
-});
-await test("募集メッセージが消されていたら本人に知らせる", async () => {
-  const m = await waitForLastTimeModal(C);
-  channelMessageStatus = 404;
-  apiCalls.length = 0;
-  await send(submitLastTime(m.json.data.custom_id, "23:00", C));
-  const [, notice] = await waitForCalls(2);
-  channelMessageStatus = 200;
-  assert.ok(notice.body.content.includes("見つかりませんでした"), notice.body.content);
 });
 
 for (const [status, expected] of [[403, "権限"], [401, "トークン"]]) {

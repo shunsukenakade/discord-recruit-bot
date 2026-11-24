@@ -25,8 +25,8 @@ export type Action = "join" | "leave" | "close" | "again" | "start" | "settime";
 export type Outcome =
   | { kind: "missing" }
   | { kind: "error"; message: string }
-  // 開始時刻の入力欄を開く（今の時刻を最初から入れておく）
-  | { kind: "modal"; startTime: string | null }
+  // 主催者だと確認できたので、開始時刻の選択画面を出す
+  | { kind: "pickTime"; state: RecruitState }
   // 募集メッセージを書き換える。filled なら定員到達で締め切ったことも知らせる
   | { kind: "update"; state: RecruitState; filled: boolean }
   // 募集メッセージに返信（引用）する
@@ -119,7 +119,7 @@ export function applyAction(state: RecruitState, action: Action, user: Member): 
     }
     case "settime": {
       if (!isHost) return { kind: "error", message: "時刻の設定は主催者のみ操作できます。" };
-      return { kind: "modal", startTime: state.startTime };
+      return { kind: "pickTime", state };
     }
   }
 }
@@ -203,36 +203,65 @@ export function startTimeModal(customId: string, startTime: string | null, title
   };
 }
 
+/**
+ * 開始時刻の選択画面（押した主催者にだけ見える）。target は「<募集ID>:<チャンネル>:<メッセージ>」。
+ * 1つのメニューに入る選択肢は25個までなので、30分おきの時刻を午前・午後の2つに分ける。
+ */
+export function timePicker(target: string, state: RecruitState) {
+  const times = (fromHour: number) =>
+    Array.from({ length: 24 }, (_, i) => {
+      const t = `${fromHour + Math.floor(i / 2)}:${i % 2 ? "30" : "00"}`;
+      return { label: t, value: t, default: t === state.startTime };
+    });
+  const menu = (id: string, placeholder: string, fromHour: number) => ({
+    type: 1,
+    components: [{ type: 3, custom_id: `timeset:${target}:${id}`, placeholder, options: times(fromHour) }],
+  });
+  const button = (customId: string, label: string, style: number) => ({ type: 2, custom_id: customId, label, style });
+  const current = state.startTime ? `（現在: ${state.startTime}）` : "";
+  return {
+    content: `「${state.game}」の開始予定を選んでください${current}`,
+    components: [
+      menu("am", "午前の時刻を選ぶ（0:00〜11:30）", 0),
+      menu("pm", "午後の時刻を選ぶ（12:00〜23:30）", 12),
+      {
+        type: 1,
+        components: [
+          button(`timeset:${target}:今`, "今", 1),
+          button(`timeset:${target}:夜`, "夜", 1),
+          button(`timeinput:${target}`, "✏️ 自分で入力", 2),
+        ],
+      },
+    ],
+  };
+}
+
 export function panelEmbed(targetChannelId: string | null) {
   const where = targetChannelId ? ` <#${targetChannelId}> に` : "";
   return {
     title: "🎮 ワンボタン募集",
     description: `ボタンを押すと、押した人が主催者になって${where} @everyone で募集します。\n` +
-      "「⏰ 最後の募集の時刻を設定」を押すと、自分が最後に立てた募集に開始時刻を設定できます。",
+      "開始時刻は、投稿された募集の「⏰ 時刻を設定」から選べます。",
     color: 0x5865f2,
   };
 }
 
-/** パネルのボタン。QUICK_RECRUITS を3つずつ1行に並べる（通常・夜・今）。 */
+// パネルに並べるゲーム（夜・今はあとから時刻で選べるので置かない）
+const PANEL_GAMES = ["v", "o", "a"];
+
 export function buildPanelComponents(targetChannelId: string | null) {
   const suffix = targetChannelId ? `:${targetChannelId}` : "";
-  const rows = [];
-  for (let i = 0; i < QUICK_RECRUITS.length; i += 3) {
-    rows.push({
+  return [
+    {
       type: 1,
-      components: QUICK_RECRUITS.slice(i, i + 3).map(([name, game, capacity]) => ({
+      components: QUICK_RECRUITS.filter(([name]) => PANEL_GAMES.includes(name)).map(([name, game, capacity]) => ({
         type: 2,
         custom_id: `panel:${name}${suffix}`,
         label: `${game}（${capacity}人）`,
         style: 1,
       })),
-    });
-  }
-  rows.push({
-    type: 1,
-    components: [{ type: 2, custom_id: "lasttime", label: "⏰ 最後の募集の時刻を設定", style: 2 }],
-  });
-  return rows;
+    },
+  ];
 }
 
 export function helpEmbed() {
@@ -259,15 +288,14 @@ export function helpEmbed() {
           "**締め切る** … 募集を締め切ります（主催者のみ）\n" +
           "**再募集** … 残り人数を @everyone で呼びかけます（主催者のみ・募集中）\n" +
           "**開始を呼びかける** … 参加者全員にメンションします（主催者のみ・締め切り後）\n" +
-          "**⏰ 時刻を設定** … 開始予定を設定・変更します（主催者のみ）\n" +
+          "**⏰ 時刻を設定** … 開始予定を30分おきの時刻・今・夜・自由入力から選びます（主催者のみ）\n" +
           "定員に達すると自動で締め切られます。",
         inline: false,
       },
       {
         name: "その他",
         value: "`/panel` … ボタン1つで募集できるパネルを置きます（サーバー管理権限が必要）。" +
-          "`送信先` で募集を投稿するチャンネルを選べます。" +
-          "パネルの「⏰ 最後の募集の時刻を設定」で、自分が最後に立てた募集に時刻を設定できます\n" +
+          "`送信先` で募集を投稿するチャンネルを選べます\n" +
           "`/help` … この説明を表示します",
         inline: false,
       },

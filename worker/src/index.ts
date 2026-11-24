@@ -11,17 +11,16 @@ import {
   helpEmbed,
   panelEmbed,
   startTimeModal,
+  timePicker,
   type Action,
   type Member,
   type RecruitState,
 } from "./recruit";
-import { LatestRecruit } from "./latest";
 
-export { Recruit, LatestRecruit };
+export { Recruit };
 
 export interface Env {
   RECRUITS: DurableObjectNamespace<Recruit>;
-  LATEST: DurableObjectNamespace<LatestRecruit>;
   DISCORD_APPLICATION_ID: string;
   DISCORD_PUBLIC_KEY: string;
   DISCORD_TOKEN: string; // wrangler secret put DISCORD_TOKEN で設定する
@@ -59,7 +58,7 @@ export default {
       case MESSAGE_COMPONENT:
         return handleComponent(interaction, env, ctx);
       case MODAL_SUBMIT:
-        return handleModalSubmit(interaction, env, ctx);
+        return handleModalSubmit(interaction, env);
     }
     return new Response("unknown interaction type", { status: 400 });
   },
@@ -102,26 +101,7 @@ async function postRecruit(interaction: any, env: Env, ctx: ExecutionContext,
   // 募集ごとの保存先は interaction ID で決め、ボタンの custom_id に埋め込む
   const recruitId: string = interaction.id;
   await recruitStub(env, recruitId).create(state);
-  ctx.waitUntil(recordLatestFromResponse(env, interaction, recruitId, state.host.id));
   return json({ type: CHANNEL_MESSAGE, data: recruitMessage(recruitId, state) });
-}
-
-/** 応答として投稿された募集メッセージのIDを調べて、主催者の「最後の募集」として記録する。 */
-async function recordLatestFromResponse(env: Env, interaction: any, recruitId: string,
-                                        hostId: string): Promise<void> {
-  // 応答を返した直後はまだメッセージができていないことがあるので、少し待ちながら数回試す
-  for (let attempt = 0; attempt < 5; attempt++) {
-    await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
-    const res = await fetch(
-      `${env.DISCORD_API_BASE}/webhooks/${env.DISCORD_APPLICATION_ID}/${interaction.token}/messages/@original`,
-    );
-    if (res.ok) {
-      const message = (await res.json()) as { id: string; channel_id: string };
-      await latestStub(env, hostId).set({ recruitId, channelId: message.channel_id, messageId: message.id });
-      return;
-    }
-  }
-  console.error("募集メッセージのIDを取得できませんでした", recruitId);
 }
 
 /** 別のチャンネルに募集を投稿し、押した本人にだけ投稿先を知らせる。 */
@@ -137,7 +117,6 @@ async function postRecruitTo(interaction: any, env: Env, ctx: ExecutionContext, 
       const message = (await res.json()) as { id: string };
       content = `<#${channelId}> に募集を投稿しました → ` +
         `https://discord.com/channels/${interaction.guild_id}/${channelId}/${message.id}`;
-      await latestStub(env, state.host.id).set({ recruitId, channelId, messageId: message.id });
     } else {
       console.error("募集の投稿に失敗しました", res.status, await res.text());
       content = res.status === 401
@@ -173,17 +152,7 @@ async function handleComponent(interaction: any, env: Env, ctx: ExecutionContext
     if (target && target !== interaction.channel_id) return postRecruitTo(interaction, env, ctx, state, target);
     return postRecruit(interaction, env, ctx, state);
   }
-  if (action === "lasttime") {
-    // パネルの「⏰ 最後の募集の時刻を設定」: 押した人が最後に主催した募集の時刻入力欄を開く
-    const user = memberOf(interaction);
-    const latest = await latestStub(env, user.id).get();
-    if (!latest) return ephemeral("まだ募集していません。先にパネルのボタンかコマンドで募集してください。");
-    const found = await recruitStub(env, latest.recruitId).act("settime", user);
-    if (found.kind === "missing") return ephemeral("最後の募集は期限切れです。新しく募集してください。");
-    if (found.kind !== "modal") return ephemeral(found.kind === "error" ? found.message : "時刻を設定できません。");
-    const customId = `lasttime:${latest.recruitId}:${latest.channelId}:${latest.messageId}`;
-    return json({ type: MODAL, data: startTimeModal(customId, found.startTime, "最後の募集の開始時刻を設定") });
-  }
+  if (action === "timeset" || action === "timeinput") return handleTimePicker(interaction, env);
   if (!recruitId) {
     // Python版のBotで作られた募集のボタン
     return ephemeral("この募集は以前のバージョンで作られたため操作できません。新しく募集を作り直してください。");
@@ -209,56 +178,74 @@ async function handleComponent(interaction: any, env: Env, ctx: ExecutionContext
       ctx.waitUntil(replyToRecruit(env, interaction, outcome.content, allowed, true));
       return json({ type: DEFERRED_UPDATE_MESSAGE });
     }
-    case "modal":
-      return json({ type: MODAL, data: startTimeModal(`settime:${recruitId}`, outcome.startTime) });
+    case "pickTime":
+      // 選択画面は別のメッセージなので、あとで書き換えられるよう募集メッセージの場所を custom_id に入れる
+      return json({
+        type: CHANNEL_MESSAGE,
+        data: {
+          ...timePicker(`${recruitId}:${interaction.channel_id}:${interaction.message.id}`, outcome.state),
+          flags: EPHEMERAL,
+        },
+      });
   }
 }
 
-/** 「⏰ 時刻を設定」の入力欄が送信されたら、募集メッセージの開始予定を書き換える。 */
-async function handleModalSubmit(interaction: any, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const [action, recruitId, channelId, messageId] = String(interaction.data.custom_id).split(":");
-  if ((action !== "settime" && action !== "lasttime") || !recruitId) {
-    return ephemeral("この入力欄は現在使えません。");
+/**
+ * 時刻の選択画面の操作。custom_id は
+ *   timeset:<募集ID>:<チャンネル>:<メッセージ>[:今|夜]  … 時刻を選んだ（時刻はメニューの値）
+ *   timeinput:<募集ID>:<チャンネル>:<メッセージ>       … 「自分で入力」で入力欄を開く
+ */
+async function handleTimePicker(interaction: any, env: Env): Promise<Response> {
+  const [action, recruitId, channelId, messageId, ...rest] = String(interaction.data.custom_id).split(":");
+  if (action === "timeinput") {
+    const found = await recruitStub(env, recruitId).act("settime", memberOf(interaction));
+    if (found.kind !== "pickTime") return updatePicker(timeErrorMessage(found));
+    return json({
+      type: MODAL,
+      data: startTimeModal(`timeedit:${recruitId}:${channelId}:${messageId}`, found.state.startTime),
+    });
   }
+  const value = interaction.data.values?.[0] ?? rest.join(":");
+  return applyStartTime(interaction, env, recruitId, channelId, messageId, value);
+}
 
-  const startTime = findInputValue(interaction.data.components, "time") ?? "";
+/** 開始時刻を保存して募集メッセージを書き換え、選択画面を結果の表示に置き換える。 */
+async function applyStartTime(interaction: any, env: Env, recruitId: string, channelId: string,
+                              messageId: string, startTime: string): Promise<Response> {
   const outcome = await recruitStub(env, recruitId).setStartTime(memberOf(interaction), startTime);
-  if (action === "lasttime" && outcome.kind === "update") {
-    // パネルから開いた入力欄なので、募集メッセージは別にある。Botトークンで書き換えて、本人に結果を知らせる
-    const state = outcome.state;
-    ctx.waitUntil((async () => {
-      const res = await discordApi(env, `/channels/${channelId}/messages/${messageId}`,
-                                   { embeds: [buildEmbed(state)], components: buildComponents(recruitId, state) },
-                                   "PATCH");
-      const link = `https://discord.com/channels/${interaction.guild_id}/${channelId}/${messageId}`;
-      let content: string;
-      if (res.ok) {
-        content = state.startTime
-          ? `最後の募集（${state.game}）の開始予定を「${state.startTime}」にしました → ${link}`
-          : `最後の募集（${state.game}）の開始予定を消しました → ${link}`;
-      } else {
-        console.error("募集メッセージの書き換えに失敗しました", res.status, await res.text());
-        content = res.status === 404
-          ? "最後の募集のメッセージが見つかりませんでした（削除された可能性があります）。"
-          : "募集メッセージを書き換えられませんでした。Botの権限を確認してください。";
-      }
-      await discordApi(env, `/webhooks/${env.DISCORD_APPLICATION_ID}/${interaction.token}/messages/@original`,
-                       { content }, "PATCH");
-    })());
-    return json({ type: DEFERRED_CHANNEL_MESSAGE, data: { flags: EPHEMERAL } });
+  if (outcome.kind !== "update") return updatePicker(timeErrorMessage(outcome));
+
+  const state = outcome.state;
+  const res = await discordApi(env, `/channels/${channelId}/messages/${messageId}`,
+                               { embeds: [buildEmbed(state)], components: buildComponents(recruitId, state) },
+                               "PATCH");
+  if (res.ok) {
+    return updatePicker(state.startTime ? `開始予定を「${state.startTime}」にしました。` : "開始予定を消しました。");
   }
-  switch (outcome.kind) {
-    case "missing":
-      return ephemeral("この募集は期限切れのため操作できません。新しく募集を作り直してください。");
-    case "update":
-      // ボタンから開いた入力欄なので、そのボタンが付いた募集メッセージを書き換えられる
-      return json({
-        type: UPDATE_MESSAGE,
-        data: { embeds: [buildEmbed(outcome.state)], components: buildComponents(recruitId, outcome.state) },
-      });
-    default:
-      return ephemeral(outcome.kind === "error" ? outcome.message : "時刻を設定できませんでした。");
-  }
+  console.error("募集メッセージの書き換えに失敗しました", res.status, await res.text());
+  return updatePicker(
+    res.status === 404 ? "募集メッセージが見つかりませんでした（削除された可能性があります）。"
+      : res.status === 401 ? "募集メッセージを書き換えられませんでした。Botのトークン設定に問題があります（Botの管理者に連絡してください）。"
+      : "募集メッセージを書き換えられませんでした。Botの権限を確認してください。",
+  );
+}
+
+function timeErrorMessage(outcome: { kind: string; message?: string }): string {
+  if (outcome.kind === "missing") return "この募集は期限切れのため操作できません。";
+  return outcome.message ?? "時刻を設定できませんでした。";
+}
+
+/** 本人にだけ見えている選択画面を、文章だけのメッセージに置き換える。 */
+function updatePicker(content: string): Response {
+  return json({ type: UPDATE_MESSAGE, data: { content, components: [] } });
+}
+
+/** 「✏️ 自分で入力」の入力欄が送信されたら、開始時刻を反映する。 */
+async function handleModalSubmit(interaction: any, env: Env): Promise<Response> {
+  const [action, recruitId, channelId, messageId] = String(interaction.data.custom_id).split(":");
+  if (action !== "timeedit" || !messageId) return ephemeral("この入力欄は現在使えません。");
+  const startTime = findInputValue(interaction.data.components, "time") ?? "";
+  return applyStartTime(interaction, env, recruitId, channelId, messageId, startTime);
 }
 
 /** 送信された入力欄の中から、指定した custom_id のテキスト入力の値を探す。 */
@@ -283,10 +270,6 @@ function memberOf(interaction: any): Member {
 
 function recruitStub(env: Env, recruitId: string) {
   return env.RECRUITS.get(env.RECRUITS.idFromName(recruitId));
-}
-
-function latestStub(env: Env, userId: string) {
-  return env.LATEST.get(env.LATEST.idFromName(userId));
 }
 
 /** 募集メッセージに返信（引用）する形で投稿する。warnOnFailure なら失敗を押した本人に伝える。 */

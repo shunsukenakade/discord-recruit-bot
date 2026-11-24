@@ -297,6 +297,54 @@ export function buildPanelComponents(targetChannelId: string | null) {
   ];
 }
 
+// valorant パネルの時刻ボタン。ボタンの custom_id には「:」を入れられないので 4 桁（2130 など）で持つ
+export const VPANEL_TIMES = ["今", ...halfHours(19, 26), "夜"];
+
+/** fromHour 時から toHour 時まで30分おき（24時以降は 0:00, 0:30 … と表示）。 */
+function halfHours(fromHour: number, toHour: number): string[] {
+  const times: string[] = [];
+  for (let m = fromHour * 60; m <= toHour * 60; m += 30) {
+    times.push(`${Math.floor(m / 60) % 24}:${m % 60 ? "30" : "00"}`);
+  }
+  return times;
+}
+
+const timeToToken = (time: string) => (time.includes(":") ? time.replace(":", "").padStart(4, "0") : time);
+
+/** custom_id の時刻（2130・0030・今・夜）を表示用（21:30・0:30・今・夜）に戻す。知らない値なら null。 */
+export function tokenToTime(token: string): string | null {
+  const time = /^\d{4}$/.test(token) ? `${Number(token.slice(0, 2))}:${token.slice(2)}` : token;
+  return VPANEL_TIMES.includes(time) ? time : null;
+}
+
+export function vpanelEmbed(targetChannelId: string | null) {
+  const where = targetChannelId ? ` <#${targetChannelId}> に` : "";
+  return {
+    title: "🎯 valorant 募集パネル",
+    description: `時刻を押すと、押した人が主催者になって${where} @everyone で valorant（5人）を募集します。\n` +
+      "人数は募集の「定員＋1／定員－1」で変えられます。",
+    color: 0xff4655,
+  };
+}
+
+/** 時刻ボタンを1行5個ずつ並べる。custom_id は vtime:<時刻>[:<送信先>]。 */
+export function buildVpanelComponents(targetChannelId: string | null) {
+  const suffix = targetChannelId ? `:${targetChannelId}` : "";
+  const rows = [];
+  for (let i = 0; i < VPANEL_TIMES.length; i += 5) {
+    rows.push({
+      type: 1,
+      components: VPANEL_TIMES.slice(i, i + 5).map((time) => ({
+        type: 2,
+        custom_id: `vtime:${timeToToken(time)}${suffix}`,
+        label: time,
+        style: time.includes(":") ? 2 : 1, // 今・夜は目立たせる
+      })),
+    });
+  }
+  return rows;
+}
+
 export function helpEmbed() {
   const quick = QUICK_RECRUITS.map(([name, game, cap]) => `\`/${name}\` … ${game}（${cap}人）`).join("\n");
   return {
@@ -330,6 +378,7 @@ export function helpEmbed() {
         name: "その他",
         value: "`/panel` … ボタン1つで募集できるパネルを置きます（サーバー管理権限が必要）。" +
           "`送信先` で募集を投稿するチャンネルを選べます\n" +
+          "`/vpanel` … 時刻ボタンで valorant を募集できるパネルを置きます（サーバー管理権限が必要）\n" +
           "`/help` … この説明を表示します",
         inline: false,
       },

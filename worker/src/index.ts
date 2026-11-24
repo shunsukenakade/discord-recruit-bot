@@ -9,9 +9,12 @@ import {
   buildPanelComponents,
   filledMessage,
   helpEmbed,
+  buildVpanelComponents,
   panelEmbed,
   startTimeModal,
   timePicker,
+  tokenToTime,
+  vpanelEmbed,
   type Action,
   type Member,
   type RecruitState,
@@ -73,13 +76,13 @@ async function handleCommand(interaction: any, env: Env, ctx: ExecutionContext):
   const options: Record<string, any> = Object.fromEntries(
     (interaction.data.options ?? []).map((o: any) => [o.name, o.value]),
   );
-  if (name === "panel") {
+  if (name === "panel" || name === "vpanel") {
     // 送信先を指定すると、パネルのボタンで作った募集はそのチャンネルに投稿される
     const target: string | null = options["送信先"] ?? null;
-    return json({
-      type: CHANNEL_MESSAGE,
-      data: { embeds: [panelEmbed(target)], components: buildPanelComponents(target) },
-    });
+    const data = name === "panel"
+      ? { embeds: [panelEmbed(target)], components: buildPanelComponents(target) }
+      : { embeds: [vpanelEmbed(target)], components: buildVpanelComponents(target) };
+    return json({ type: CHANNEL_MESSAGE, data });
   }
   const host = memberOf(interaction);
   let state: RecruitState;
@@ -131,6 +134,13 @@ async function postRecruitTo(interaction: any, env: Env, ctx: ExecutionContext, 
   return json({ type: DEFERRED_CHANNEL_MESSAGE, data: { flags: EPHEMERAL } });
 }
 
+/** パネルから作った募集を、送信先があればそこへ、無ければパネルと同じチャンネルに投稿する。 */
+function postPanelRecruit(interaction: any, env: Env, ctx: ExecutionContext, state: RecruitState,
+                          target: string | undefined): Promise<Response> {
+  if (target && target !== interaction.channel_id) return postRecruitTo(interaction, env, ctx, state, target);
+  return postRecruit(interaction, env, ctx, state);
+}
+
 function recruitMessage(recruitId: string, state: RecruitState) {
   return {
     content: "@everyone",
@@ -148,9 +158,17 @@ async function handleComponent(interaction: any, env: Env, ctx: ExecutionContext
     const quick = QUICK_RECRUITS.find(([n]) => n === recruitId);
     if (!quick) return ephemeral("このボタンは現在使えません。パネルを置き直してください。");
     const [, game, capacity] = quick;
-    const state = newState(memberOf(interaction), game, capacity, null, null);
-    if (target && target !== interaction.channel_id) return postRecruitTo(interaction, env, ctx, state, target);
-    return postRecruit(interaction, env, ctx, state);
+    return postPanelRecruit(interaction, env, ctx, newState(memberOf(interaction), game, capacity, null, null), target);
+  }
+  if (action === "vtime") {
+    // valorant パネルの時刻ボタン: 押した人を主催者にして、その時刻で valorant を募集する
+    // custom_id は vtime:<時刻(2130・今・夜)>[:<送信先チャンネルID>]
+    const startTime = tokenToTime(recruitId);
+    const quick = QUICK_RECRUITS.find(([n]) => n === "v");
+    if (!startTime || !quick) return ephemeral("このボタンは現在使えません。パネルを置き直してください。");
+    const [, game, capacity] = quick;
+    return postPanelRecruit(interaction, env, ctx, newState(memberOf(interaction), game, capacity, startTime, null),
+                            target);
   }
   if (action === "timeset" || action === "timeinput") return handleTimePicker(interaction, env);
   if (!recruitId) {

@@ -160,15 +160,19 @@ async function handleComponent(interaction: any, env: Env, ctx: ExecutionContext
     const [, game, capacity] = quick;
     return postPanelRecruit(interaction, env, ctx, newState(memberOf(interaction), game, capacity, null, null), target);
   }
-  if (action === "vtime") {
-    // valorant パネルの時刻ボタン: 押した人を主催者にして、その時刻で valorant を募集する
-    // custom_id は vtime:<時刻(2130・今・夜)>[:<送信先チャンネルID>]
-    const startTime = tokenToTime(recruitId);
+  if (action === "vtime" || action === "vtimesel") {
+    // valorant パネル: 押した人を主催者にして、選んだ時刻で valorant を募集する
+    //   ボタン         vtime:<今|夜>[:<送信先>]（以前のパネルの vtime:2130 なども動く）
+    //   ドロップダウン vtimesel[:<送信先>]、時刻は選んだ値（2130 など）
+    const [token, channel] = action === "vtime"
+      ? [recruitId, target]
+      : [interaction.data.values?.[0] ?? "", recruitId];
+    const startTime = tokenToTime(token);
     const quick = QUICK_RECRUITS.find(([n]) => n === "v");
     if (!startTime || !quick) return ephemeral("このボタンは現在使えません。パネルを置き直してください。");
     const [, game, capacity] = quick;
     return postPanelRecruit(interaction, env, ctx, newState(memberOf(interaction), game, capacity, startTime, null),
-                            target);
+                            channel);
   }
   if (action === "timeset" || action === "timeinput") return handleTimePicker(interaction, env);
   if (!recruitId) {

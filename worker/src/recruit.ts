@@ -329,26 +329,34 @@ export function vpanelEmbed(targetChannelId: string | null) {
   };
 }
 
-// スマホでは「19:00」のボタンが1行に4個までしか入らず、5個だと折り返して崩れる
-const VPANEL_PER_ROW = 4;
-
-/** 1行目に「今」「夜」、2行目から時刻を1行4個ずつ並べる。custom_id は vtime:<時刻>[:<送信先>]。 */
+/**
+ * 1行目に「今」「夜」のボタン、2行目に時刻のドロップダウン（ボタンを並べるとスマホで折り返して崩れるため）。
+ * custom_id はボタンが vtime:<今|夜>[:<送信先>]、ドロップダウンが vtimesel[:<送信先>]（値は 2130 など）。
+ */
 export function buildVpanelComponents(targetChannelId: string | null) {
   const suffix = targetChannelId ? `:${targetChannelId}` : "";
-  const row = (times: string[], style: number) => ({
-    type: 1,
-    components: times.map((time) => ({
-      type: 2,
-      custom_id: `vtime:${timeToToken(time)}${suffix}`,
-      label: time,
-      style,
-    })),
-  });
-  const rows = [row(VPANEL_WORDS, 1)]; // 今・夜は目立たせる
-  for (let i = 0; i < VPANEL_CLOCK_TIMES.length; i += VPANEL_PER_ROW) {
-    rows.push(row(VPANEL_CLOCK_TIMES.slice(i, i + VPANEL_PER_ROW), 2));
-  }
-  return rows;
+  return [
+    {
+      type: 1,
+      components: VPANEL_WORDS.map((word) => ({
+        type: 2,
+        custom_id: `vtime:${word}${suffix}`,
+        label: word,
+        style: 1,
+      })),
+    },
+    {
+      type: 1,
+      components: [
+        {
+          type: 3,
+          custom_id: `vtimesel${suffix}`,
+          placeholder: "🕒 時刻を選んで募集する…",
+          options: VPANEL_CLOCK_TIMES.map((time) => ({ label: time, value: timeToToken(time) })),
+        },
+      ],
+    },
+  ];
 }
 
 export function helpEmbed() {

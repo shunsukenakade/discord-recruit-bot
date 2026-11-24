@@ -454,48 +454,72 @@ await test("知らないパネルボタンには案内を返す", async () =>
   assert.ok(isError(await send(press("panel:zzz", A)), "パネルを置き直して")));
 
 console.log("valorant パネル（/vpanel）");
-await test("/vpanel で 1行目に今・夜、2行目から 19:00〜2:00（30分おき）を4個ずつ並べる（スマホで崩れない）", async () => {
+const vselect = (value, who, customId = "vtimesel") => ({
+  id: nextId(), type: 3, token: "tok-vsel", channel_id: CHANNEL, guild_id: "999", message: { id: "vpanelMsg" },
+  data: { custom_id: customId, component_type: 3, values: [value] }, ...who,
+});
+await test("/vpanel で 1行目に今・夜のボタン、2行目に 19:00〜2:00（30分おき）のドロップダウン", async () => {
   const r = await send(command("vpanel", undefined, host));
   assert.equal(r.json.type, 4);
   assert.equal(r.json.data.embeds[0].title, "🎯 valorant 募集パネル");
-  const rows = r.json.data.components.map((row) => row.components);
-  assert.deepEqual(rows.map((row) => row.map((b) => b.label)), [
-    ["今", "夜"],
-    ["19:00", "19:30", "20:00", "20:30"],
-    ["21:00", "21:30", "22:00", "22:30"],
-    ["23:00", "23:30", "0:00", "0:30"],
-    ["1:00", "1:30", "2:00"],
+  const [words, menuRow] = r.json.data.components.map((row) => row.components);
+  assert.equal(r.json.data.components.length, 2);
+  assert.deepEqual(words.map((b) => [b.label, b.custom_id]), [["今", "vtime:今"], ["夜", "vtime:夜"]]);
+  const menu = menuRow[0];
+  assert.equal(menu.type, 3);
+  assert.equal(menu.custom_id, "vtimesel");
+  assert.deepEqual(menu.options.map((o) => o.label), [
+    "19:00", "19:30", "20:00", "20:30", "21:00", "21:30", "22:00", "22:30",
+    "23:00", "23:30", "0:00", "0:30", "1:00", "1:30", "2:00",
   ]);
-  assert.deepEqual(rows[0].map((b) => b.custom_id), ["vtime:今", "vtime:夜"]);
-  assert.equal(rows[1][0].custom_id, "vtime:1900");
-  assert.equal(rows[3][3].custom_id, "vtime:0030");
+  assert.deepEqual(menu.options[10], { label: "0:00", value: "0000" });
 });
-for (const [token, expected] of [["2130", "21:30"], ["0030", "0:30"], ["今", "今"], ["夜", "夜"]]) {
-  await test(`「${expected}」を押すと、押した人が主催者で開始予定 ${expected} の valorant 募集を投稿`, async () => {
-    const p = press(`vtime:${token}`, A, "vpanelMsg");
+for (const word of ["今", "夜"]) {
+  await test(`「${word}」ボタンで、押した人が主催者で開始予定「${word}」の valorant 募集を投稿`, async () => {
+    const p = press(`vtime:${word}`, A, "vpanelMsg");
     const r = await send(p);
     assert.equal(r.json.type, 4);
     assert.equal(r.json.data.content, "@everyone");
     assert.equal(r.json.data.embeds[0].title, "🟢 募集中｜valorant 参加者募集");
     assert.equal(r.json.data.embeds[0].footer.text, "主催: Aさん");
-    assert.equal(field(r, "開始予定"), expected);
+    assert.equal(field(r, "開始予定"), word);
     assert.equal(field(r, "定員"), "1/5人");
     assert.equal(buttons(r).join.custom_id, `join:${p.id}`);
   });
 }
-await test("送信先つきの /vpanel は送信先に投稿する", async () => {
+for (const [value, expected] of [["2130", "21:30"], ["0030", "0:30"]]) {
+  await test(`ドロップダウンで ${expected} を選ぶと、開始予定 ${expected} の valorant 募集を投稿`, async () => {
+    const s = vselect(value, B);
+    const r = await send(s);
+    assert.equal(r.json.type, 4);
+    assert.equal(r.json.data.embeds[0].footer.text, "主催: Bさん");
+    assert.equal(field(r, "開始予定"), expected);
+    const j = await send(press(`join:${s.id}`, C));
+    assert.equal(field(j, "定員"), "2/5人");
+  });
+}
+await test("以前のパネルの時刻ボタン（vtime:2130）もそのまま動く", async () => {
+  const r = await send(press("vtime:2130", A, "oldPanel"));
+  assert.equal(field(r, "開始予定"), "21:30");
+});
+await test("送信先つきの /vpanel は、ボタンもドロップダウンも送信先に投稿する", async () => {
   const r = await send(command("vpanel", [{ name: "送信先", type: 7, value: "777" }], host));
-  assert.equal(r.json.data.components[2].components[0].custom_id, "vtime:2100:777");
+  assert.equal(r.json.data.components[0].components[1].custom_id, "vtime:夜:777");
+  assert.equal(r.json.data.components[1].components[0].custom_id, "vtimesel:777");
   apiCalls.length = 0;
-  const sent = await send({ ...press("vtime:2100:777", B, "vpanelMsg"), guild_id: "999" });
+  const sent = await send(vselect("2100", B, "vtimesel:777"));
   assert.equal(sent.json.type, 5);
   const [post] = await waitForCalls(2);
   assert.equal(post.path, "/channels/777/messages");
   assert.equal(post.body.embeds[0].fields.find((f) => f.name === "開始予定").value, "21:00");
+  apiCalls.length = 0;
+  await send({ ...press("vtime:今:777", B, "vpanelMsg"), guild_id: "999" });
+  const [post2] = await waitForCalls(2);
+  assert.equal(post2.path, "/channels/777/messages");
 });
-await test("知らない時刻のボタンには案内を返す", async () => {
+await test("知らない時刻には案内を返す", async () => {
   assert.ok(isError(await send(press("vtime:1234", A)), "パネルを置き直して"));
-  assert.ok(isError(await send(press("vtime:朝", A)), "パネルを置き直して"));
+  assert.ok(isError(await send(vselect("朝", A)), "パネルを置き直して"));
 });
 
 console.log("送信先つきパネル");

@@ -421,12 +421,21 @@ await test("定員は1〜99人の範囲", async () => {
 });
 
 console.log("ワンボタン募集パネル");
-await test("/panel で valorant・overwatch・apex の3ボタンのパネルを置く", async () => {
-  const r = await send(command("panel", undefined, host));
+// パネルを置くコマンドを実行し、Botの普通のメッセージとして投稿されたパネルの中身を返す
+async function placePanel(name, options) {
+  apiCalls.length = 0;
+  const r = await send(command(name, options, host));
   assert.equal(r.json.type, 4);
-  assert.equal(r.json.data.flags, undefined);
-  assert.equal(r.json.data.embeds[0].title, "🎮 ワンボタン募集");
-  const rows = r.json.data.components;
+  assert.equal(r.json.data.flags, 64);
+  assert.equal(r.json.data.content, "パネルを置きました。");
+  const post = apiCalls.find((a) => a.method === "POST");
+  assert.equal(post.path, `/channels/${CHANNEL}/messages`);
+  return post.body;
+}
+await test("/panel で valorant・overwatch・apex の3ボタンのパネルを置く（「使用しました」が付かない投稿）", async () => {
+  const panel = await placePanel("panel");
+  assert.equal(panel.embeds[0].title, "🎮 ワンボタン募集");
+  const rows = panel.components;
   assert.equal(rows.length, 1);
   assert.deepEqual(rows[0].components.map((b) => [b.custom_id, b.label]),
     [["panel:v", "valorant（5人）"], ["panel:o", "overwatch（5人）"], ["panel:a", "apex（3人）"]]);
@@ -452,13 +461,19 @@ await test("同じパネルは何度でも使える", async () => {
 });
 await test("知らないパネルボタンには案内を返す", async () =>
   assert.ok(isError(await send(press("panel:zzz", A)), "パネルを置き直して")));
+await test("パネルを置けないときは本人に知らせる", async () => {
+  channelMessageStatus = 403;
+  const r = await send(command("panel", undefined, host));
+  channelMessageStatus = 200;
+  assert.ok(isError(r, "パネルを置けませんでした"));
+  assert.ok(r.json.data.content.includes("メッセージを送信"));
+});
 
 console.log("valorant パネル（/vpanel）");
 await test("/vpanel で 1行目に今・夜、2行目から 19:00〜2:00（30分おき）を4個ずつ並べる（スマホで崩れない）", async () => {
-  const r = await send(command("vpanel", undefined, host));
-  assert.equal(r.json.type, 4);
-  assert.equal(r.json.data.embeds[0].title, "🎯 valorant 募集パネル");
-  const rows = r.json.data.components.map((row) => row.components);
+  const panel = await placePanel("vpanel");
+  assert.equal(panel.embeds[0].title, "🎯 valorant 募集パネル");
+  const rows = panel.components.map((row) => row.components);
   assert.deepEqual(rows.map((row) => row.map((b) => b.label)), [
     ["今", "夜"],
     ["19:00", "19:30", "20:00", "20:30"],
@@ -484,8 +499,8 @@ for (const [token, expected] of [["2130", "21:30"], ["0030", "0:30"], ["今", "�
   });
 }
 await test("送信先つきの /vpanel は送信先に投稿する", async () => {
-  const r = await send(command("vpanel", [{ name: "送信先", type: 7, value: "777" }], host));
-  assert.equal(r.json.data.components[2].components[0].custom_id, "vtime:2100:777");
+  const panel = await placePanel("vpanel", [{ name: "送信先", type: 7, value: "777" }]);
+  assert.equal(panel.components[2].components[0].custom_id, "vtime:2100:777");
   apiCalls.length = 0;
   const sent = await send({ ...press("vtime:2100:777", B, "vpanelMsg"), guild_id: "999" });
   assert.equal(sent.json.type, 5);
@@ -511,10 +526,9 @@ await test("一時期のドロップダウン版パネル（vtimesel）も動く
 console.log("送信先つきパネル");
 const TARGET = "777";
 await test("/panel 送信先:#募集 のボタンには送信先が入る", async () => {
-  const c = command("panel", [{ name: "送信先", type: 7, value: TARGET }], host);
-  const r = await send(c);
-  assert.equal(r.json.data.components[0].components[0].custom_id, `panel:v:${TARGET}`);
-  assert.ok(r.json.data.embeds[0].description.includes(`<#${TARGET}> に`));
+  const panel = await placePanel("panel", [{ name: "送信先", type: 7, value: TARGET }]);
+  assert.equal(panel.components[0].components[0].custom_id, `panel:v:${TARGET}`);
+  assert.ok(panel.embeds[0].description.includes(`<#${TARGET}> に`));
 });
 await test("押すと送信先チャンネルに募集を投稿し、本人にだけリンクを知らせる", async () => {
   apiCalls.length = 0;

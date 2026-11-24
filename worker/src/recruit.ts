@@ -20,7 +20,9 @@ export interface RecruitState {
   closed: boolean;
 }
 
-export type Action = "join" | "leave" | "close" | "again" | "start" | "settime";
+export type Action = "join" | "leave" | "close" | "again" | "start" | "settime" | "capup" | "capdown";
+
+const MAX_CAPACITY = 99;
 
 export type Outcome =
   | { kind: "missing" }
@@ -121,6 +123,28 @@ export function applyAction(state: RecruitState, action: Action, user: Member): 
       if (!isHost) return { kind: "error", message: "時刻の設定は主催者のみ操作できます。" };
       return { kind: "pickTime", state };
     }
+    case "capup": {
+      if (!isHost) return { kind: "error", message: "定員の変更は主催者のみ操作できます。" };
+      if (!state.capacity) return { kind: "error", message: "定員なしの募集です。" };
+      if (state.capacity >= MAX_CAPACITY) return { kind: "error", message: `定員は${MAX_CAPACITY}人までです。` };
+      state.capacity += 1;
+      // 枠が空いたら募集中に戻す（満員で締め切った募集をもう1人募集したいとき）
+      if (state.participants.length < state.capacity) state.closed = false;
+      return { kind: "update", state, filled: false };
+    }
+    case "capdown": {
+      if (!isHost) return { kind: "error", message: "定員の変更は主催者のみ操作できます。" };
+      if (!state.capacity) return { kind: "error", message: "定員なしの募集です。" };
+      if (state.capacity <= 1) return { kind: "error", message: "定員は1人より少なくできません。" };
+      if (state.capacity - 1 < state.participants.length) {
+        return { kind: "error", message: `参加者が${state.participants.length}人いるので、定員をこれより減らせません。` };
+      }
+      state.capacity -= 1;
+      // 減らした結果ちょうど満員になったら、参加したときと同じように締め切って知らせる
+      const filled = !state.closed && state.participants.length >= state.capacity;
+      if (filled) state.closed = true;
+      return { kind: "update", state, filled };
+    }
   }
 }
 
@@ -171,7 +195,16 @@ export function buildComponents(recruitId: string, state: RecruitState) {
       ],
     },
     // 1行に置けるボタンは5個までなので2行目に置く
-    { type: 1, components: [button("settime", "⏰ 時刻を設定", 2)] },
+    {
+      type: 1,
+      components: [
+        button("settime", "⏰ 時刻を設定", 2),
+        // 定員なしの募集では押せない。減らすほうは参加者の人数（最低1人）まで
+        button("capup", "定員＋1", 2, !state.capacity || state.capacity >= MAX_CAPACITY),
+        button("capdown", "定員－1", 2,
+               !state.capacity || state.capacity <= Math.max(1, state.participants.length)),
+      ],
+    },
   ];
 }
 
@@ -289,6 +322,7 @@ export function helpEmbed() {
           "**再募集** … 残り人数を @everyone で呼びかけます（主催者のみ・募集中）\n" +
           "**開始を呼びかける** … 参加者全員にメンションします（主催者のみ・締め切り後）\n" +
           "**⏰ 時刻を設定** … 開始予定を30分おきの時刻・今・夜・自由入力から選びます（主催者のみ）\n" +
+          "**定員＋1 / 定員－1** … 定員を1人ずつ増減します（主催者のみ）\n" +
           "定員に達すると自動で締め切られます。",
         inline: false,
       },

@@ -353,6 +353,73 @@ await test("募集メッセージが消されていたら知らせる", async ()
   assert.ok(r.json.data.content.includes("見つかりませんでした"), r.json.data.content);
 });
 
+console.log("定員＋1 / 定員－1");
+await test("2行目に定員＋1・定員－1があり、主催者だけ1人では減らせない状態", async () => {
+  const c = command("a", undefined, host);
+  const r = await send(c);
+  const row = r.json.data.components[1].components;
+  assert.deepEqual(row.map((b) => b.custom_id), [`settime:${c.id}`, `capup:${c.id}`, `capdown:${c.id}`]);
+  assert.equal(buttons(r).capup.disabled, false);
+  assert.equal(buttons(r).capdown.disabled, false); // 定員3・参加1なので減らせる
+});
+await test("主催者以外は定員を変えられない", async () => {
+  const c = command("a", undefined, host);
+  await send(c);
+  assert.ok(isError(await send(press(`capup:${c.id}`, A)), "主催者のみ"));
+  assert.ok(isError(await send(press(`capdown:${c.id}`, A)), "主催者のみ"));
+});
+await test("＋1で定員が増え、－1で減る", async () => {
+  const c = command("a", undefined, host);
+  await send(c);
+  const up = await send(press(`capup:${c.id}`, host));
+  assert.equal(up.json.type, 7);
+  assert.equal(field(up, "定員"), "1/4人");
+  const down = await send(press(`capdown:${c.id}`, host));
+  assert.equal(field(down, "定員"), "1/3人");
+});
+await test("参加者の人数より少なくはできず、ちょうど満員になったら締め切って知らせる", async () => {
+  const c = command("a", undefined, host); // 定員3
+  await send(c);
+  await send(press(`join:${c.id}`, A)); // 2/3
+  apiCalls.length = 0;
+  const r = await send(press(`capdown:${c.id}`, host)); // 2/2 → 満員
+  assert.equal(field(r, "定員"), "2/2人");
+  assert.equal(r.json.data.embeds[0].title, "🔴 締め切り｜apex 参加者募集");
+  assert.equal(buttons(r).capdown.disabled, true);
+  assert.equal(buttons(r).start.disabled, false);
+  const [call] = await waitForCalls(1);
+  assert.ok(call.body.content.startsWith("apex のメンバーが揃いました！（2/2人）"));
+  assert.ok(isError(await send(press(`capdown:${c.id}`, host)), "減らせません"));
+});
+await test("満員で締め切られた募集に＋1すると募集中に戻り、また参加できる", async () => {
+  const c = command("a", [{ name: "人数", type: 4, value: 2 }], host);
+  await send(c);
+  await send(press(`join:${c.id}`, A)); // 2/2 満員
+  const r = await send(press(`capup:${c.id}`, host));
+  assert.equal(field(r, "定員"), "2/3人");
+  assert.equal(r.json.data.embeds[0].title, "🟢 募集中｜apex 参加者募集");
+  assert.equal(buttons(r).join.disabled, false);
+  const j = await send(press(`join:${c.id}`, B));
+  assert.equal(field(j, "定員"), "3/3人");
+});
+await test("定員なしの募集では押せない", async () => {
+  const c = command("recruit", [{ name: "game", type: 3, value: "minecraft" }], host);
+  const r = await send(c);
+  assert.equal(buttons(r).capup.disabled, true);
+  assert.equal(buttons(r).capdown.disabled, true);
+  assert.ok(isError(await send(press(`capup:${c.id}`, host)), "定員なし"));
+});
+await test("定員は1〜99人の範囲", async () => {
+  const one = command("a", [{ name: "人数", type: 4, value: 1 }], host);
+  const r1 = await send(one);
+  assert.equal(buttons(r1).capdown.disabled, true);
+  assert.ok(isError(await send(press(`capdown:${one.id}`, host)), "1人より少なく"));
+  const max = command("a", [{ name: "人数", type: 4, value: 99 }], host);
+  const r99 = await send(max);
+  assert.equal(buttons(r99).capup.disabled, true);
+  assert.ok(isError(await send(press(`capup:${max.id}`, host)), "99人まで"));
+});
+
 console.log("ワンボタン募集パネル");
 await test("/panel で valorant・overwatch・apex の3ボタンのパネルを置く", async () => {
   const r = await send(command("panel", undefined, host));
